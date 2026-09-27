@@ -1,6 +1,11 @@
 *This repo is a learning project for me. I am not accepting outside contributions or pull requests.*
 
 
+Just assume there are indents where there would normally be an indent, like in for loops or while loops.
+
+I have no idea how to indent here.
+
+
 # Variables and Types
 var = value
 
@@ -76,35 +81,54 @@ Boolean operators:
 
 
 # While Loops
+
 while condition
-    body
+
+   body
+
 end
 
+
 Example:
+
 i = 0
+
 while i < 5
-    print(i)
-    i = i + 1
+
+   print(i)
+    
+   i = i + 1
+    
 end
 
 
 # Creating and Using Functions
 def returnType functionName(parameterType parameterName)
-    body
-    return ~every function MUST end with a return statement, but they dont all have to return something
+
+   body
+    
+   return ~every function MUST end with a return statement, but they dont all have to return something
 
 Examples:
+
 def int sum(int x, int y) ~creates a function with an int return type and two int parameters
-    summed = x + y
-    return summed
+
+   summed = x + y
+    
+   return summed
 
 x = 5
+
 def none increment() ~creates a function with no return type and no parameters
-    x = x + 1
-    return ~dont have to return a value here
+
+   x = x + 1
+    
+   return ~dont have to return a value here
 
 Functions can only return one item at a time.
+
 Functions can be called by putting parenthesis after the functions name, and values inside of those parenthesis.
+
 z = add(1, 2)
 
 
