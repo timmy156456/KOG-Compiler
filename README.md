@@ -19,7 +19,7 @@ x = TRUE
 These are all examples of ways to write a boolean, caps doesn't matter.
 
 ~This is a full line comment
-~This is a block comment, a newline character is appended to the end of this so it can also serve as an optional line terminator~
+\~This is a block comment, a newline character is appended to the end of this so it can also serve as an optional line terminator\~
 Example:
 x = 5 ~~ y = x
 
