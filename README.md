@@ -78,12 +78,62 @@ Boolean operators:
 ">=" checks if left is more than or equal to right value
 
 
+# If Statements
+```
+if condition
+   body
+end
+```
+and
+```
+if condition
+   body
+else
+   elseBody
+end
+```
+and
+```
+if condition
+   body
+else if condition
+   elseIfBody
+end
+```
+and
+```
+if condition
+   body
+else if condition
+   elseIfBody
+else
+   elseBody
+end
+```
+
+You can also directly use variables as the condition:
+```
+x = 1
+if x ~it compares x's value to a true boolean value, which is 1 so this is true
+   print(x)
+end
+```
+```
+x = 0
+if x ~this one will be false since it is not equal to 1
+   print(x)
+end
+```
+
+
 # While Loops
 ```
 while condition
    body
 end
 ```
+There are also `continue` and `break` statements, just like any other language.
+
 
 Example:
 ```
