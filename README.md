@@ -1,10 +1,6 @@
 *This repo is a learning project for me. I am not accepting outside contributions or pull requests.*
 
 
-Just assume there are indents where there would normally be an indent, like in for loops or while loops.
-
-I have no idea how to indent here.
-
 
 # Variables and Types
 ```
