@@ -3,19 +3,28 @@
 
 # Variables and Types
 var = value
+
 OR
+
 value = var
 
+
 Forwards and backwards assignment. If you want to assign x to y as y = x (backwards assigned) then you need to write it as "(x) = y".
+
 Variable types are determined at compile-time by the value that it is assigned.
 
 x = 5
+
 10 = x
+
 These are int variables
 
 x = true
+
 x = False
+
 x = TRUE
+
 These are all examples of ways to write a boolean, caps doesn't matter.
 
 ~This is a full line comment
