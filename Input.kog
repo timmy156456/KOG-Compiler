@@ -1,0 +1,23 @@
+~just a basic primesInRange function, takes two input numbers from terminal and finds all primes within that range
+
+
+def bool isPrime(int num)
+    i = num // 2
+    while i > 1
+        if num % i == 0
+            return false
+        end
+        i = i - 1
+    end
+    return true
+
+def none primesInRange(int x, int y)
+    while x < y
+        if isPrime(x)
+            println(x)
+        end
+        x = x + 1
+    end
+    return
+
+primesInRange(intput(7), intput(7))
