@@ -28,29 +28,40 @@ x = TRUE
 These are all examples of ways to write a boolean, caps doesn't matter.
 
 ~This is a full line comment
+
 \~This is a block comment, a newline character is appended to the end of this so it can also serve as an optional line terminator\~
 
 Example:
 x = 5 ~~ y = x
 
 Booleans (bools) are treated as numbers, 1 for true, -1 for false.
+
 x = 5 * false ~x's value is -5 because 5 * -1 is -5
 
 
 # Operators
 Unary operators:
+
 "-" this negates a value
+
 "+" this makes a value its absolute value
 
 Regular operators:
+
 x + y ~addition
+
 x - y ~subtraction
+
 x * y ~multiplication
+
 x ^ y ~exponentiation
+
 x // y ~int division, must be used by int variable types and currently only supports positive numbers
+
 x % y ~modulos
 
 Boolean operators:
+
 "==" checks if two values are equal
 
 "!=" OR "!" checks if two values are not equal, both mean the same thing
