@@ -1,7 +1,7 @@
 *This repo is a learning project for me. I am not accepting outside contributions or pull requests.*
 
 
-#Variables and Types
+# Variables and Types
 var = value
 OR
 value = var
@@ -27,7 +27,7 @@ Booleans (bools) are treated as numbers, 1 for true, -1 for false.
 x = 5 * false ~x's value is -5 because 5 * -1 is -5
 
 
-#Operators
+# Operators
 Unary operators:
 "-" this negates a value
 "+" this makes a value its absolute value
@@ -49,7 +49,7 @@ Boolean operators:
 ">=" checks if left is more than or equal to right value
 
 
-#While Loops
+# While Loops
 while condition
     body
 end
@@ -62,7 +62,7 @@ while i < 5
 end
 
 
-#Creating and Using Functions
+# Creating and Using Functions
 def returnType functionName(parameterType parameterName)
     body
     return ~every function MUST end with a return statement, but they dont all have to return something
@@ -82,7 +82,7 @@ Functions can be called by putting parenthesis after the functions name, and val
 z = add(1, 2)
 
 
-#Premade Functions
+# Premade Functions
 
 print(param, param, param) ~takes infinite arguments, no newline character printed after regular arguments
 println(param, param, param) ~takes infinite arguments, newline character printed after regular arguments
@@ -96,7 +96,7 @@ exit(code?) ~exits the program with given code value, if code value is not provi
 
 
 
-#Notes
+# Notes
 This is my first compiler.
 I worked on this solo.
 No AI was used to write any code at all, including the assembly.
