@@ -130,7 +130,8 @@ All assembly written in the file is my own work.
 
 I do not have strings, floats, or classes in the language yet.
 
-#How to Use
+# How to Use
+
 It can read from any file, but I use .kog as the file suffix.
 
 Until I add terminal usage, you must scroll to the very end of the file and replace the file paths with your own file path and destination.
