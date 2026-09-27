@@ -111,9 +111,11 @@ z = add(1, 2)
 # Premade Functions
 
 print(param, param, param) ~takes infinite arguments, no newline character printed after regular arguments
+
 println(param, param, param) ~takes infinite arguments, newline character printed after regular arguments
 
 strint(value) ~turns a string into an integer, errors with code 127 if impossible
+
 intput(bufferSize) ~takes an integer input of size bufferSize, I recommend using a bufferSize of 7, so you can guarantee there will be a null terminator at the end of the input
 
 strlen(string) ~returns the length of a string, not very useful yet since strings dont exist right now
@@ -124,8 +126,11 @@ exit(code?) ~exits the program with given code value, if code value is not provi
 
 # Notes
 This is my first compiler.
+
 I worked on this solo.
+
 No AI was used to write any code at all, including the assembly.
+
 All assembly written in the file is my own work.
 
 I do not have strings, floats, or classes in the language yet.
@@ -135,6 +140,9 @@ I do not have strings, floats, or classes in the language yet.
 It can read from any file, but I use .kog as the file suffix.
 
 Until I add terminal usage, you must scroll to the very end of the file and replace the file paths with your own file path and destination.
+
 After you have your paths in, just run the file and it will write into a .s (assembly) file.
+
 The assembly file must exist prior to running the script or nothing will be written.
+
 You can run the assembly file by running "./file.s" in your terminal, or by using a plugin with VSCode.
