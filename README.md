@@ -41,6 +41,43 @@ Booleans (bools) are treated as numbers, 1 for true, -1 for false.
 ```
 x = 5 * false ~x's value is -5 because 5 * -1 is -5
 ```
+## String Type
+
+Strings are created by using double or single quotes ("Hello, World!" or 'Hello, World!'). They also have escape sequences like \n, and you can embed single quotes in a double quoted string, and double quotes in a single quoted string.
+
+String creation and concatenation example:
+```
+myString1 = "Hello, "
+
+myString2 = "World!"
+
+finalString = strcon(myString1, myString2)
+
+println(finalString)   ~will print "Hello, World!"
+```
+Strings can be sliced very similarly to python as str[start:stop\:step]
+
+Taking string input and indexing/slicing example:
+```
+str = "Hello, World!"
+
+hello = str[:5]   ~will return "Hello" because the empty start means 0, and goes to index 5 exclusive which is "o"
+
+h = str[0]        ~will return "H" because index 0 of str is "H"
+
+~you can reverse strings too
+
+str = str[::-1]   ~this will reverse the string, this one will become "!dlroW ,olleH"
+
+
+~taking input is very easy, its input(charLen), charLen is the max number of bytes/characters to take from user input
+
+inp = input(32)   ~takes 32 bytes/characters of input
+```
+If there's an error while slicing or indexing a string it will print "Err: BadSlice" and terminate the program.
+
+Strings can be compared with the equal() method, it takes two object inputs, returns true if their direct contents are equal, very useful for comparing strings.
+
 
 # Operators
 Unary operators:
@@ -184,9 +221,20 @@ println(param, param, param) ~takes infinite arguments, newline character printe
 
 strint(value) ~turns a string into an integer, errors with code 127 if impossible
 
-intput(bufferSize) ~takes an integer input of size bufferSize, I recommend using a bufferSize of 7, so you can guarantee there will be a null terminator at the end of the input
+intput(bufferSize) ~takes an integer input of size bufferSize, bufferSize 28 is the min that can hold the largest int, but nothing is stopping you from allocating more space for empty zeros
 
-strlen(string) ~returns the length of a string, not very useful yet since strings dont exist right now
+strlen(string) ~returns the length of a string, does NOT calculate length, just returns the string objects length
+~every string has a built in length property, so it does not have to calculate the length and can just return the property
+
+input(charLen) ~takes charLen bytes/characters of input from terminal
+
+string[start:stop:step] ~splits a string starting at start, ending at step, and stepping by step
+
+string[index] ~creates a new string object of size 1 containing the character at that index of the string
+
+strcon(str1, str2) ~returns a new string that is the result of concatenating str1 with str2
+
+equal(obj1, obj2) ~compares two objects to each other, returns true if direct contents are equal
 
 exit(code?) ~exits the program with given code value, if code value is not provided it will default to 0
 ```
@@ -201,11 +249,11 @@ No AI was used to write any code at all, including the assembly.
 
 All assembly written in the file is my own work.
 
-I do not have strings, floats, or classes in the language yet.
+I do not have floats, or classes in the language yet.
 
 # How to Use
 
-It can read from any file, but I use .kog as the file suffix.
+It can read from any regular text file, but I use .kog as the file suffix.
 
 Until I add terminal usage, you must scroll to the very end of the file and replace the file paths with your own file path and destination.
 
