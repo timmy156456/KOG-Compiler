@@ -2137,7 +2137,10 @@ class CodeGenerator():
                 self.addLine("push rax")
             baked = SemanticAnalyzer(ProgramNode([])).baked_functions
             #obj = self.retIsObj(tree.retType) and not tree.name in baked
-            nat = (baked[tree.name] is INTNode) or (baked[tree.name] is FLOATNode) or (baked[tree.name] is BOOLNode)
+            try:
+                nat = (baked[tree.name] is INTNode) or (baked[tree.name] is FLOATNode) or (baked[tree.name] is BOOLNode)
+            except:
+                nat = (tree.retType is INTNode) or (tree.retType is FLOATNode) or (tree.retType is BOOLNode)
             if "print" in args and nat:
                 self.addLine("call intstr")
                 self.addLine("add rsp, 8")
@@ -2395,12 +2398,14 @@ class Optimizer():
         start = self.source.index("input:\n")
         for i in range(len(self.source)-start):
             i += start
-            # if i <= 500:
-            #     continue
             line = self.source[i]
             if not line:
                 continue
             elif "rsp" in line or "rbp" in line:
+                push1 = ""
+                push1ln = 0
+                push2 = ""
+                push2ln = 0
                 continue
             elif line[:4] == "push":
                 if not push1:
