@@ -7,14 +7,17 @@ class Compiler():
             return [line for line in src]
 
     def Compile(self):
-        lex = Lexer(self.source_file).Tokenize()
+        lex = Lexer(self.source_file)
+        if not lex.lineLen:
+            return ".intel_syntax noprefix\n.global _start\n_start:\nmov rax, 60\nxor rdi, rdi\nsyscall\n"
+        lex = lex.Tokenize()
         print(f"///{lex}///")
         parser = Parser(lex).Parse()
         print(f"///{parser}///")
         semantic = SemanticAnalyzer(parser).Analyze()
         print(f"///{semantic}///")
-        generator = CodeGenerator(semantic)
-        return generator.Generate() + ["push 0\ncall exit\n"]
+        generator = CodeGenerator(semantic).Generate() + ["push 0\ncall exit\n"]
+        return Optimizer(generator).Optimize()
 
 
 class Lexer():
@@ -23,6 +26,8 @@ class Lexer():
         self.gen = self.__iter__()
         self.eol = False
         self.next_line()
+        if not self.line:
+            return
         self.lineLen = len(self.line)
         self.tokens = []
         self.x = 0
@@ -48,7 +53,10 @@ class Lexer():
             "//": [TokenCategory.OPERATOR, TokenType.INT_DIV[1]],
             "^": [TokenCategory.OPERATOR, TokenType.EXPONENT[1]],
             "(": [TokenCategory.OPERATOR, TokenType.P_OPEN[1]],
-            ")": [TokenCategory.OPERATOR, TokenType.P_CLOSE[1]]
+            ")": [TokenCategory.OPERATOR, TokenType.P_CLOSE[1]],
+            "[": [TokenCategory.OPERATOR, TokenType.B_OPEN[1]],
+            "]": [TokenCategory.OPERATOR, TokenType.B_CLOSE[1]],
+            ":": [TokenCategory.OPERATOR, TokenType.COLON[1]]
         }
 
     # iterates over the whole file
@@ -178,6 +186,21 @@ class Lexer():
         result = self.comparators.get(built) or self.operations.get(built)
         return Token(result[0], result[1], built)
 
+    def read_string(self):
+        built = ""
+        glanced = self.glance()
+        start = glanced
+        self.advance()
+        glanced = self.glance()
+        while glanced != start:
+            built += glanced
+            nl = self.advance()
+            if nl:
+                built += "\n"
+            glanced = self.glance()
+        self.advance()
+        return Token(TokenType.STRING[0], TokenType.STRING[1], built)
+
     def isfloat(self, x):
         try:
             float(x)
@@ -221,6 +244,8 @@ class Lexer():
             if glanced == ",":
                 token = Token(TokenType.COMMA[0], TokenType.COMMA[1], ",")
                 self.advance()
+            elif glanced == '"' or glanced == "'":
+                token = self.read_string()
             elif glanced.isidentifier():
                 token = self.read_generic(TokenType.IDENTIFIER, "$isidentifier")
                 if token.isType(TokenType.ELSE):
@@ -274,6 +299,8 @@ class Token():
             return FLOATNode
         if self.isType(TokenType.BOOL):
             return BOOLNode
+        if self.isType(TokenType.STRING):
+            return STRINGNode
         if self.isType(TokenType.NONE):
             return NONENode
 
@@ -294,6 +321,7 @@ class TokenType():
     CONSTANT = [TokenCategory.OBJECT, "CONSTANT", TYPE_OBJECT]
     NUMBER = [TokenCategory.OBJECT, "NUMBER", CONSTANT]
     BOOL = [TokenCategory.OBJECT, "BOOL", CONSTANT]
+    STRING = [TokenCategory.OBJECT, "STRING", CONSTANT]
 
     TRUE = [TokenCategory.OBJECT, "TRUE", BOOL]
     FALSE = [TokenCategory.OBJECT, "FALSE", BOOL]
@@ -324,6 +352,9 @@ class TokenType():
 
     P_OPEN = [TokenCategory.OPERATOR, "P_OPEN", REGULAR]
     P_CLOSE = [TokenCategory.OPERATOR, "P_CLOSE", REGULAR]
+    B_OPEN = [TokenCategory.OPERATOR, "B_OPEN", REGULAR]
+    B_CLOSE = [TokenCategory.OPERATOR, "B_CLOSE", REGULAR]
+    COLON = [TokenCategory.OPERATOR, "COLON", REGULAR]
 
     # comparators
     NOT_EQUALS = [TokenCategory.OPERATOR, "NOT_EQUALS", COMPARATOR]
@@ -364,7 +395,7 @@ class TokenType():
     RETURN = [TokenCategory.STATEMENT, "RETURN", STATEMENT]
     parse_for = {
         "DEF": "DEF", "RETURN": "RETURN",
-        "INT": "INT", "FLOAT": "FLOAT", "BOOL": "BOOL", "NONE": "NONE",
+        "INT": "INT", "FLOAT": "FLOAT", "BOOL": "BOOL", "STRING": "STRING", "NONE": "NONE",
 
         "IF": "IF", "THEN": "THEN", "END": "END", "AND": "AND", "OR": "OR", "ELSE": "ELSE",
         "WHILE": "WHILE", "CONTINUE": "CONTINUE", "BREAK": "BREAK",
@@ -386,10 +417,29 @@ class Parser():
     def advance(self, how_many=1):
         self.token_index += how_many
 
-    def parse_value(self):
+    def parse_value(self, skip=False):
+        identStr = self.token().isType(TokenType.IDENTIFIER) or self.token().isType(TokenType.STRING)
         if self.token().isType(TokenType.INT):
             self.advance()
             return INTNode(self.token(-1).value)
+        elif not skip and identStr and self.token(1) and self.token(1).isType(TokenType.B_OPEN):
+            return self.parse_bracket()
+        elif self.token().isType(TokenType.STRING):
+            self.advance()
+            value = []
+            s = self.token(-1).value
+            for i in range(len(s)):
+                if s[i-1] == "\\" and i < len(s)-1:
+                    newChar = (s[i-1] + s[i]).encode().decode("unicode_escape")
+                    value.append(hex(ord(newChar))[2:])
+                    continue
+                if s[i] == "\\":
+                    continue
+                value.append(hex(ord(s[i]))[2:])
+            for i in range(len(value)):
+                if len(value[i]) == 1:
+                    value[i] = "0" + value[i]
+            return STRINGNode(value)
         elif self.token().isType(TokenType.NONE):
             return NONENode()
         elif self.token().isType(TokenType.FLOAT):
@@ -518,10 +568,10 @@ class Parser():
 
     def parse_if(self, nested=False):
         self.advance()
-        left = self.parse_comparison()
+        left = self.parse_statement()
         while self.token().isChildOf(TokenType.COND_MOD):
             self.advance()
-            left = CONDMODNode(left, self.token(-1), self.parse_comparison())
+            left = CONDMODNode(left, self.token(-1), self.parse_statement())    # changed to parse statement for now, was parse comparison
         code = [self.parse_statement()]
         while self.token().isType(TokenType.EOL):
             self.advance()
@@ -559,6 +609,32 @@ class Parser():
         print(self.token(-1), self.token(), self.token(1))
         return WHILENode(left, code)
 
+    def parse_bracket(self):
+        item = self.parse_value(True)
+        self.advance()
+        value = []
+        isSlice = False
+        i = 0
+        while not self.token(-1).isType(TokenType.B_CLOSE) and not self.token().isType(TokenType.B_CLOSE):
+            if self.token().isType(TokenType.COLON):
+                value.append(":")
+                self.advance()
+                i += 1
+                isSlice = True
+                continue
+            value.append(self.parse_statement())
+            if str(value[-1]).lstrip("-").isdigit():
+                value[-1] = str(value[-1])
+            if self.token().isType(TokenType.COLON):
+                isSlice = True
+            self.advance()
+            i += 1
+        if i > 3:
+            raise SyntaxError("Too many \":\" present.")
+        if self.token() and self.token().isType(TokenType.B_CLOSE):
+            self.advance()
+        return BracketUse(item, value, isSlice)
+
     def parse_statement(self, nested=False):
         if self.token().isType(TokenType.IF):
             return self.parse_if(nested)
@@ -576,7 +652,8 @@ class Parser():
         if self.token().isType(TokenType.IDENTIFIER) and endParen:
             return self.parse_function_call()
         isVal = self.token().isChildOf(TokenType.NUMBER) or self.token().isType(TokenType.IDENTIFIER) or self.token().isChildOf(TokenType.BOOL)
-        if self.token().isChildOf(TokenType.REGULAR) or self.token().isType(TokenType.P_OPEN) or isVal:
+        isStart = self.token().isChildOf(TokenType.REGULAR) or self.token().isType(TokenType.P_OPEN) or self.token().isType(TokenType.STRING)
+        if isStart or isVal or self.token().isChildOf(TokenType.B_OPEN):
             return self.parse_comparison()
         if self.token().isType(TokenType.PLUS) or self.token().isType(TokenType.MINUS):
             return self.parse_comparison()
@@ -689,7 +766,7 @@ class UnaryNode():
         self.value = value
         self.operation = operation
     def __str__(self):
-        return f"({self.operation}{self.value})"
+        return f"{self.operation}{self.value}"
     def __repr__(self):
         return self.__str__()
 
@@ -698,8 +775,19 @@ class FunctionCall():
     def __init__(self, name, args):
         self.name = name
         self.args = args
+        self.retType = None
     def __str__(self):
         return f"{self.name}({self.args})"
+    def __repr__(self):
+        return self.__str__()
+
+class BracketUse():
+    def __init__(self, item, args, isSlice=False):
+        self.item = item
+        self.args = args
+        self.isSlice = isSlice
+    def __str__(self):
+        return f"{self.item}{self.args}"
     def __repr__(self):
         return self.__str__()
 
@@ -755,6 +843,16 @@ class FLOATNode(EndNode):
     def __repr__(self):
         return self.__str__()
 
+class STRINGNode(EndNode):
+    __module__ = None
+    def __init__(self, val):
+        self.parent = Token(TokenType.STRING[0], TokenType.STRING[1], val)
+        self.value = val
+    def __str__(self):
+        return f"({self.value})"
+    def __repr__(self):
+        return self.__str__()
+
 class BOOLNode(EndNode):
     __module__ = None
     def __init__(self, val):
@@ -789,19 +887,25 @@ class SemanticAnalyzer():
             "exit": None,
             "strlen": INTNode,
             "intput": INTNode,
-            "strint": INTNode
+            "strint": INTNode,
+            "objlen": INTNode,
+            "strcon": STRINGNode,
+            "input": STRINGNode,
+            "equals": BOOLNode
         }
         plusRules = {
-            INTNode: {INTNode: INTNode, FLOATNode: FLOATNode, BOOLNode: INTNode, UnaryNode: INTNode},
+            INTNode: {INTNode: INTNode, FLOATNode: FLOATNode, BOOLNode: INTNode, UnaryNode: INTNode, STRINGNode: STRINGNode},
             FLOATNode: {INTNode: FLOATNode, FLOATNode: FLOATNode, BOOLNode: FLOATNode, UnaryNode: FLOATNode},
-            BOOLNode: {INTNode: INTNode, FLOATNode: FLOATNode, BOOLNode: INTNode, UnaryNode: INTNode},
-            UnaryNode: {INTNode: INTNode, FLOATNode: FLOATNode, BOOLNode: INTNode, UnaryNode: UnaryNode}
+            BOOLNode: {INTNode: INTNode, FLOATNode: FLOATNode, BOOLNode: INTNode, UnaryNode: INTNode, STRINGNode: STRINGNode},
+            UnaryNode: {INTNode: INTNode, FLOATNode: FLOATNode, BOOLNode: INTNode, UnaryNode: UnaryNode},
+            STRINGNode: {INTNode: STRINGNode, BOOLNode: STRINGNode}
         }
         boolRules = {
-            INTNode: {INTNode: BOOLNode, FLOATNode: BOOLNode, BOOLNode: BOOLNode, UnaryNode: BOOLNode},
-            FLOATNode: {INTNode: BOOLNode, FLOATNode: BOOLNode, BOOLNode: BOOLNode, UnaryNode: BOOLNode},
-            BOOLNode: {INTNode: BOOLNode, FLOATNode: BOOLNode, BOOLNode: BOOLNode, UnaryNode: BOOLNode},
-            UnaryNode: {INTNode: BOOLNode, FLOATNode: BOOLNode, BOOLNode: BOOLNode, UnaryNode: BOOLNode}
+            INTNode: {INTNode: BOOLNode, FLOATNode: BOOLNode, BOOLNode: BOOLNode, UnaryNode: BOOLNode, STRINGNode: BOOLNode},
+            FLOATNode: {INTNode: BOOLNode, FLOATNode: BOOLNode, BOOLNode: BOOLNode, UnaryNode: BOOLNode, STRINGNode: BOOLNode},
+            BOOLNode: {INTNode: BOOLNode, FLOATNode: BOOLNode, BOOLNode: BOOLNode, UnaryNode: BOOLNode, STRINGNode: BOOLNode},
+            UnaryNode: {INTNode: BOOLNode, FLOATNode: BOOLNode, BOOLNode: BOOLNode, UnaryNode: BOOLNode, STRINGNode: BOOLNode},
+            STRINGNode: {INTNode: BOOLNode, FLOATNode: BOOLNode, BOOLNode: BOOLNode, UnaryNode: BOOLNode, STRINGNode: BOOLNode}
         }
         self.operation_outputs = {
             "+": plusRules,
@@ -817,10 +921,11 @@ class SemanticAnalyzer():
                 UnaryNode: {INTNode: FLOATNode, FLOATNode: FLOATNode, BOOLNode: FLOATNode, UnaryNode: FLOATNode}
             },
             "//": {
-                INTNode: {INTNode: INTNode, FLOATNode: INTNode, BOOLNode: INTNode, UnaryNode: INTNode},
+                INTNode: {INTNode: INTNode, FLOATNode: INTNode, BOOLNode: INTNode, UnaryNode: INTNode, STRINGNode: STRINGNode},
                 FLOATNode: {INTNode: INTNode, FLOATNode: INTNode, BOOLNode: INTNode, UnaryNode: INTNode},
-                BOOLNode: {INTNode: INTNode, FLOATNode: INTNode, BOOLNode: INTNode, UnaryNode: INTNode},
-                UnaryNode: {INTNode: INTNode, FLOATNode: INTNode, BOOLNode: INTNode, UnaryNode: INTNode}
+                BOOLNode: {INTNode: INTNode, FLOATNode: INTNode, BOOLNode: INTNode, UnaryNode: INTNode, STRINGNode: STRINGNode},
+                UnaryNode: {INTNode: INTNode, FLOATNode: INTNode, BOOLNode: INTNode, UnaryNode: INTNode, STRINGNode: STRINGNode},
+                STRINGNode: {INTNode: STRINGNode, FLOATNode: STRINGNode, BOOLNode: STRINGNode, STRINGNode: STRINGNode, UnaryNode: STRINGNode}
             },
 
             "==": boolRules,
@@ -885,7 +990,7 @@ class SemanticAnalyzer():
 
     def isEndNode(self, tree):
         arg1 = self.isNode(tree) and not self.isUnary(tree) and not type(tree) is FunctionCall and not type(tree) is IFNode
-        return arg1 and not type(tree) is FunctionAssign and not type(tree) is FunctionReturn
+        return arg1 and not type(tree) is FunctionAssign and not type(tree) is FunctionReturn and not type(tree) is BracketUse
 
     def isUnary(self, tree):
         return type(tree) is UnaryNode
@@ -908,7 +1013,9 @@ class SemanticAnalyzer():
             code = SemanticAnalyzer(ProgramNode(tree.code), self.vars).Analyze().branches
             return FunctionAssign(tree.name, tree.args, tree.retType, code), tree.retType.getAsNode()
         if type(tree) is FunctionCall:
-            return tree, self.vars.get(tree.name, self.baked_functions.get(tree.name))
+            ret = self.vars.get(tree.name, self.baked_functions.get(tree.name))
+            tree.retType = ret
+            return tree, ret
         if type(tree) is IFNode:
             code = SemanticAnalyzer(ProgramNode(tree.code), self.vars).Analyze().branches
             return IFNode(tree.conditions, code, tree.codeelse)
@@ -917,6 +1024,12 @@ class SemanticAnalyzer():
             return WHILENode(tree.conditions, code)
         if type(tree) is LOOPMODNode:
             return tree, None
+        if type(tree) is BracketUse:
+            analyze, analyzeType = self.treeAnalyze(tree.item)
+            if tree.isSlice:
+                return BracketUse(analyze, tree.args, True), analyzeType
+            else:
+                return BracketUse(analyze, tree.args, False), analyzeType
         if type(tree) is AssignmentNode:        # if assignment then analyze right instead and return it
             analyzed, varType = self.treeAnalyze(tree.value)
             self.vars[tree.identifier] = varType
@@ -995,6 +1108,15 @@ def getWhileBreakLabelGenerator():
         labelIndex += 1
 getWhileBreakLabel = getWhileBreakLabelGenerator()
 
+def getRoDataLabelGenerator():
+    labelIndex = 0
+    while True:
+        yield f"RO_DATA_{labelIndex}"
+        labelIndex += 1
+getRoDataLabel = getRoDataLabelGenerator()
+
+varTypes = {}
+
 class CodeGenerator():
     def __init__(self, analyzedTokens: ProgramNode, isFunc=False):
         self.tokens = analyzedTokens.branches
@@ -1013,15 +1135,17 @@ class CodeGenerator():
         }
 
         self.skipped_funcs = []
-        
-        self.data = []                                                  # GLOBAL VARIABLES ONLY
+
+        self.rodata = []
+        self.rodataMap = {}
+        self.data = ["_pgstrt: .quad 0\n_tmpvar: .quad 0\n"]            # GLOBAL VARIABLES ONLY
         self.text = []                                                  # holds functions (only used by first created CodeGenerator instance)
         self.main = []                                                  # holds main, also where sub generators store their function data
 
         self.vars = {}                                                  # HOLDS ALL VARIABLE LOCATIONS AS STRINGS
         #["rax", "rcx", "rdx", "rsi", "rdi", "r8", "r9", "r10", "r11"]
 
-    def Generate(self, ret=True, prevVars={}, args=[]):
+    def Generate(self, ret=True, prevVars={}, args=[], objVars: dict[str: Token]={}):
         self.args = args
         if prevVars or not ret:
             self.vars = prevVars
@@ -1051,81 +1175,116 @@ class CodeGenerator():
                 "    pop rsp\n",
                 "    ret\n",
                 "\n",
-                "strlen:\n",
-                "  push rsp\n",
-                "  push rbp\n",
-                "  push rcx\n",
-                "  mov rbp, rsp\n",
-                "  mov rcx, [rbp+32]\n",
-                "  xor rax, rax\n",
-                "  0:\n",
-                "    cmp byte ptr [rcx], 0\n",
-                "    je 1f\n",
-                "    inc rax\n",
-                "    inc rcx\n",
-                "    jmp 0b\n",
-                "  1:\n",
-                "    pop rcx\n",
-                "    pop rbp\n",
-                "    pop rsp\n",
-                "    ret\n",
-                "\n",
                 "intstr:\n",
                 "  push rsp\n",
                 "  push rbp\n",
                 "  mov rbp, rsp\n",
-                "  sub rsp, 16\n",
-                "  mov qword ptr [rbp-8], 0\n",
-                "  mov qword ptr [rbp-8], 0\n",
+                "  sub rsp, 24\n",
+                "  push 32\n",
+                "  call heapalloc\n",
+                "  add rsp, 8\n",
+                "  mov rbx, rax\n",
+                "  xor rdi, rdi\n",
+                "  mov qword ptr [rbp-8], 10\n",
+                "  mov qword ptr [rbp-16], 0\n",
+                "  mov qword ptr [rbp-24], 1\n",
                 "  mov rax, [rbp+24]\n",
-                "  mov qword ptr [rbp-8], 0\n",
-                "  mov rcx, rbp\n",
-                "  sub rcx, 1\n",
-                "  mov rdx, 1\n",
-                "  mov qword ptr [rbp-16], 10\n",
+                "  cmp rax, 0\n",
+                "  jne 0f\n",
+                "  mov rax, rbx\n",
+                "  mov qword ptr [rax], 1\n",
+                "  mov qword ptr [rax+8], 0x30\n",
+                "  jmp 4f\n",
+                "  0:\n",
+                "  cmp rax, 0\n",
+                "  jge 0f\n",
+                "  neg rax\n",
+                "  0:\n",
+                "    cmp rax, 0\n",
+                "    je 1f\n",
+                "    mov r15, 10\n",
+                "    xor rdx, rdx\n",
+                "    div r15\n",
+                "    mov r15, [rbp-8]\n",
+                "    imul r15, [rbp-16]\n",
+                "    mov qword ptr [rbp-16], r15\n",
+                "    add qword ptr [rbp-16], rdx\n",
+                "    cmp rdx, 0\n",
+                "    jne 2f\n",
+                "    cmp qword ptr [rbp-24], 0\n",
+                "    je 3f\n",
+                "    inc rdi\n",
+                "    jmp 3f\n",
+                "    2:\n",
+                "    mov qword ptr [rbp-24], 0\n",
+                "    3:\n",
+                "    jmp 0b\n",
+                "  1:\n",
+                "  xor rsi, rsi\n",
+                "  mov rax, [rbp-16]\n",
+                "  lea r15, [rbx+8]\n",
+                "  mov qword ptr [rbp-8], 10\n",
+                "  cmp qword ptr [rbp+24], 0\n",
+                "  jge 0f\n",
+                "  mov byte ptr [rbx+8], 0x2d\n",
+                "  mov rsi, 1\n",
                 "  0:\n",
                 "    cmp rax, 0\n",
                 "    je 1f\n",
                 "    xor rdx, rdx\n",
-                "    div qword ptr [rbp-16]\n",
-                "    add rdx, 48\n",
-                "    mov [rcx], dl\n",
-                "    dec rcx\n",
+                "    div qword ptr [rbp-8]\n",
+                "    add dl, 0x30\n",
+                "    mov byte ptr [r15+rsi], dl\n",
+                "    inc rsi\n",
                 "    jmp 0b\n",
                 "  1:\n",
-                "    mov qword ptr [rbp-16], 0x100\n",
-                "    mov rcx, rbp\n",
-                "    sub rcx, 8\n",
-                "    cmp qword ptr [rcx], 0\n",
-                "    jne 3f\n",
-                "    mov rax, 0x30\n",
-                "    jmp 4f\n",
-                "  3:\n",
-                "    cmp byte ptr [rcx], 0\n",
-                "    jne 4f\n",
-                "    xor rdx, rdx\n",
-                "    mov rax, [rcx]\n",
-                "    div qword ptr [rbp-16]\n",
-                "    mov qword ptr [rbp-8], rax\n",
-                "    jmp 3b\n",
+                "  0:\n",
+                "    cmp rdi, 0\n",
+                "    je 1f\n",
+                "    mov byte ptr [r15+rsi], 0x30\n",
+                "    inc rsi\n",
+                "    dec rdi\n",
+                "    jmp 0b\n",
+                "  1:\n",
+                "  mov rax, rbx\n",
+                "  mov qword ptr [rax], rsi\n",
                 "  4:\n",
-                "    add rsp, 16\n",
-                "    pop rbp\n",
-                "    pop rsp\n",
-                "    ret\n",
+                "  add rsp, 24\n",
+                "  pop rbp\n",
+                "  pop rsp\n",
+                "  ret\n",
                 "print:\n",
                 "  push rsp\n",
                 "  push rbp\n",
                 "  mov rbp, rsp\n",
-                "  mov r11, [rbp+24]\n",
-                "  mov r9, rbp\n",
-                "  add r9, 32\n",
-                "  imul r11, 8\n",
-                "  mov rax, 1\n",
-                "  mov rdi, 1\n",
-                "  mov rsi, r9\n",
-                "  mov rdx, r11\n",
-                "  syscall\n",
+                "  mov r15, 0\n",
+                "  0:\n",
+                "    cmp r15, [rbp+24]\n",
+                "    je 1f\n",
+                "    mov rax, 1\n",
+                "    mov rdi, 1\n",
+                "    mov rsi, r15\n",
+                "    imul rsi, 8\n",
+                "    add rsi, rbp\n",
+                "    add rsi, 32\n",
+                "    mov rdx, [rsi]\n",
+                "    lea rsi, [rdx+8]\n",
+                "    mov rdx, [rdx]\n",
+                "    syscall\n",
+                "    inc r15\n",
+                "    cmp r15, [rbp+24]\n",
+                "    je 2f\n",
+                "    mov rax, 1\n",
+                "    mov rdi, 1\n",
+                "    mov byte ptr [rbp-8], 0x20\n",
+                "    lea rsi, [rbp-8]\n",
+                "    mov rdx, 1\n",
+                "    syscall\n",
+                "    2:\n",
+                "    dec r15\n",
+                "    inc r15\n",
+                "    jmp 0b\n",
+                "  1:\n",
                 "  pop rbp\n",
                 "  pop rsp\n",
                 "  ret\n",
@@ -1134,20 +1293,39 @@ class CodeGenerator():
                 "  push rbp\n",
                 "  mov rbp, rsp\n",
                 "  sub rsp, 8\n",
-                "  mov qword ptr [rbp-8], 0\n",
-                "  mov r11, [rbp+24]\n",
-                "  mov r9, rbp\n",
-                "  add r9, 32\n",
-                "  imul r11, 8\n",
+                "  mov r15, 0\n",
+                "  0:\n",
+                "    cmp r15, [rbp+24]\n",
+                "    je 1f\n",
+                "    mov rax, 1\n",
+                "    mov rdi, 1\n",
+                "    mov rsi, r15\n",
+                "    imul rsi, 8\n",
+                "    add rsi, rbp\n",
+                "    add rsi, 32\n",
+                "    mov rdx, [rsi]\n",
+                "    lea rsi, [rdx+8]\n",
+                "    mov rdx, [rdx]\n",
+                "    syscall\n",
+                "    inc r15\n",
+                "    cmp r15, [rbp+24]\n",
+                "    je 2f\n",
+                "    mov rax, 1\n",
+                "    mov rdi, 1\n",
+                "    mov byte ptr [rbp-8], 0x20\n",
+                "    lea rsi, [rbp-8]\n",
+                "    mov rdx, 1\n",
+                "    syscall\n",
+                "    2:\n",
+                "    dec r15\n",
+                "    \n",
+                "    inc r15\n",
+                "    jmp 0b\n",
+                "  1:\n",
                 "  mov rax, 1\n",
                 "  mov rdi, 1\n",
-                "  mov rsi, r9\n",
-                "  mov rdx, r11\n",
-                "  syscall\n",
-                "  mov rax, 1\n",
-                "  mov rdi, 1\n",
-                "  mov qword ptr [rbp-8], 0x0a\n",
-                "  mov rsi, rsp\n",
+                "  mov byte ptr [rbp-8], 0x0a\n",
+                "  lea rsi, [rbp-8]\n",
                 "  mov rdx, 1\n",
                 "  syscall\n",
                 "  add rsp, 8\n",
@@ -1159,59 +1337,522 @@ class CodeGenerator():
                 "  pop rdi\n",
                 "  mov rax, 60\n",
                 "  syscall\n",
-                "strint:\n",
+                "heapalloc:\n",
                 "  push rsp\n",
                 "  push rbp\n",
+                "  push rdx\n",
+                "  push rcx\n",
+                "  push r8\n",
+                "  push r10\n",
                 "  mov rbp, rsp\n",
-                "  mov rax, rbp\n",
-                "  add rax, 24\n",
-                "  xor r8, r8\n",
-                "  xor r9, r9\n",
-                "  jmp 0f\n",
-                "  2:\n",
-                "    mov rax, 60\n",
-                "    mov rdi, 127\n",
-                "    syscall\n",
-                "  0:\n",
-                "    cmp byte ptr [rax], 0\n",
-                "    je 1f\n",
-                "    sub byte ptr [rax], 48\n",
-                "    cmp byte ptr [rax], 9\n",
-                "    jbe 3f\n",
-                "    cmp byte ptr [rax], 0xda\n",
-                "    jne 3f\n",
-                "    sub byte ptr [rax], 0xda\n",
-                "    jmp 1f\n",
-                "    3:\n",
-                "    imul r8, 10\n",
-                "    mov r9b, byte ptr [rax]\n",
-                "    add r8, r9\n",
-                "    inc rax\n",
-                "    jmp 0b\n",
+                "  sub rsp, 32\n",
+                "  mov rax, [rbp+56]\n",
+                "  xor rdx, rdx\n",
+                "  mov rcx, 16\n",
+                "  div rcx\n",
+                "  cmp rdx, 0\n",
+                "  je 1f\n",
+                "  sub rcx, rdx\n",
+                "  add qword ptr [rbp+56], rcx\n",
                 "  1:\n",
-                "    mov rax, r8\n",
-                "    pop rbp\n",
-                "    pop rsp\n",
-                "    ret\n",
-                "intput:\n",
+                "  mov rax, [rbp+56]\n",
+                "  xor rdx, rdx\n",
+                "  mov rcx, 8\n",
+                "  div rcx\n",
+                "  mov qword ptr [rbp-32], rax\n",
+                "  cmp qword ptr [_pgstrt], 0\n",
+                "  jne 0f\n",
+                "  mov rax, 9\n",
+                "  mov rdi, 0\n",
+                "  mov rsi, 4096\n",
+                "  mov rdx, 3\n",
+                "  mov r10, 0x22\n",
+                "  mov r8, -1\n",
+                "  mov r9, 0\n",
+                "  syscall\n",
+                "  cmp rax, 0\n",
+                "  jle 1f\n",
+                "  mov qword ptr [_pgstrt], rax\n",
+                "  mov r14, rax\n",
+                "  mov qword ptr [r14], 0\n",
+                "  mov qword ptr [r14+4088], -1\n",
+                "  lea r13, [r14+8]\n",
+                "  mov rdi, rax\n",
+                "  mov rcx, 512\n",
+                "  xor rax, rax\n",
+                "  cld\n",
+                "  rep stosq\n",
+                "  0:\n",
+                "  mov r15, [rbp+56]\n",
+                "  add r15, 16\n",
+                "  cmp r15, 4080\n",
+                "  jg 1f\n",
+                "  mov rax, 1\n",
+                "  mov rbx, 1\n",
+                "  jmp 50f\n",
+                "  10:\n",
+                "  mov rdi, r13\n",
+                "  sub rdi, r14\n",
+                "  mov rdx, 4088\n",
+                "  sub rdx, rdi\n",
+                "  cmp rax, -1\n",
+                "  je 15f\n",
+                "  mov rax, r13\n",
+                "  50:\n",
+                "  jmp 0f\n",
+                "  15:\n",
+                "  cmp rdx, 32\n",
+                "  jl 30f\n",
+                "  mov rsi, [rbp+56]\n",
+                "  add rsi, 16\n",
+                "  cmp rsi, rdx\n",
+                "  jge 30f\n",
+                "  mov rax, r13\n",
+                "  jmp 2f\n",
+                "  30:\n",
+                "  mov qword ptr [r13], -1\n",
+                "  31:\n",
+                "  mov rax, 9\n",
+                "  mov rdi, 0\n",
+                "  mov rsi, 4096\n",
+                "  mov rdx, 3\n",
+                "  mov r10, 0x22\n",
+                "  mov r8, -1\n",
+                "  mov r9, 0\n",
+                "  syscall\n",
+                "  cmp rax, 0\n",
+                "  jle 1f\n",
+                "  mov qword ptr [r14], rax\n",
+                "  mov r14, rax\n",
+                "  lea r13, [r14+8]\n",
+                "  mov rdi, r14\n",
+                "  mov rcx, 512\n",
+                "  xor rax, rax\n",
+                "  cld\n",
+                "  rep stosq\n",
+                "  mov qword ptr [r14+4088], -1\n",
+                "  mov rax, r13\n",
+                "  jmp 2f\n",
+                "  0:\n",
+                "  mov qword ptr [rbp-8], r15\n",
+                "  mov r15, [_pgstrt]\n",
+                "  mov rax, -1\n",
+                "  3:\n",
+                "    mov qword ptr [rbp-16], r15\n",
+                "    lea r15, [r15+8]\n",
+                "    5:\n",
+                "      cmp qword ptr [r15], 0\n",
+                "      jle 6f\n",
+                "      mov rdx, [rbp-8]\n",
+                "      cmp rdx, [r15]\n",
+                "      jg 8f\n",
+                "      lea r15, [r15+8]\n",
+                "      cmp qword ptr [r15], 0\n",
+                "      jne 7f\n",
+                "      mov rbx, -1\n",
+                "      lea rdi, [r15+8]\n",
+                "      mov rcx, [rbp-32]\n",
+                "      xor rax, rax\n",
+                "      cld\n",
+                "      rep stosq\n",
+                "      lea rax, [r15-8]\n",
+                "      jmp 2f\n",
+                "      8:\n",
+                "      lea r15, [r15+8]\n",
+                "      7:\n",
+                "      lea r15, [r15-8]\n",
+                "      mov qword ptr [rbp-24], r15\n",
+                "      mov r15, [r15]\n",
+                "      add r15, [rbp-24]\n",
+                "      jmp 5b\n",
+                "    6:\n",
+                "    mov r15, [rbp-16]\n",
+                "    cmp qword ptr [r15], 0\n",
+                "    je 10b\n",
+                "    mov r15, [r15]\n",
+                "    jmp 3b\n",
+                "  4:\n",
+                "  1:\n",
+                "    mov rax, 0x6d654d6565724630\n",
+                "    push rax\n",
+                "    lea rsi, [rsp]\n",
+                "    mov rdi, 1\n",
+                "    mov rax, 0x00203A726F727245\n",
+                "    push rax\n",
+                "    mov rax, 1\n",
+                "    lea rsi, [rsp]\n",
+                "    mov rdx, 16\n",
+                "    syscall\n",
+                "    mov rax, 60\n",
+                "    mov rdi, 126\n",
+                "    syscall\n",
+                "  2:\n",
+                "  cmp rbx, -1\n",
+                "  je 1f\n",
+                "  mov rsi, [rbp+56]\n",
+                "  add rsi, 16\n",
+                "  mov qword ptr [rax], rsi\n",
+                "  1:\n",
+                "  lea rax, [rax+8]\n",
+                "  mov qword ptr [rax], 1\n",
+                "  lea rax, [rax+8]\n",
+                "  cmp rbx, -1\n",
+                "  je 1f\n",
+                "  mov r13, rax\n",
+                "  add r13, [rbp+56]\n",
+                "  1:\n",
+                "  add rsp, 32\n",
+                "  pop r10\n",
+                "  pop r8\n",
+                "  pop rcx\n",
+                "  pop rdx\n",
+                "  pop rbp\n",
+                "  pop rsp\n",
+                "  ret\n",
+                "strint:\n",
                 "  push rsp\n",
                 "  push rbp\n",
                 "  mov rbp, rsp\n",
                 "  sub rsp, 8\n",
                 "  mov qword ptr [rbp-8], 0\n",
+                "  mov rax, [rbp+24]\n",
+                "  mov rbx, 1\n",
+                "  mov rdi, [rax]\n",
+                "  lea rdi, [rax+rdi]\n",
+                "  add rdi, 7\n",
+                "  lea r15, [rax+7]\n",
+                "  mov qword ptr [rbp+24], r15\n",
+                "  0:\n",
+                "    cmp qword ptr [rbp+24], rdi\n",
+                "    je 1f\n",
+                "    mov r15b, 0x2d\n",
+                "    cmp byte ptr [rdi], r15b\n",
+                "    jne 2f\n",
+                "    lea r15, [rax+8]\n",
+                "    cmp rdi, r15\n",
+                "    jne 1f\n",
+                "    mov r15, qword ptr [rbp-8]\n",
+                "    imul r15, -1\n",
+                "    mov qword ptr [rbp-8], r15\n",
+                "    jmp 1f\n",
+                "    2:\n",
+                "    xor r15, r15\n",
+                "    mov r15b, byte ptr [rdi]\n",
+                "    sub r15, 0x30\n",
+                "    imul r15, rbx\n",
+                "    add qword ptr [rbp-8], r15\n",
+                "    imul rbx, 10\n",
+                "    dec rdi\n",
+                "    jmp 0b\n",
+                "  1:\n",
+                "  mov rax, [rbp-8]\n",
+                "  add rsp, 8\n",
+                "  pop rbp\n",
+                "  pop rsp\n",
+                "  ret\n",
+                "intput:\n",
+                "  push rsp\n",
+                "  push rbp\n",
+                "  mov rbp, rsp\n",
+                "  sub rsp, 8\n",
+                "  push 32\n",
+                "  call heapalloc\n",
+                "  add rsp, 8\n",
+                "  mov qword ptr [rbp-8], rax\n",
+                "  lea rsi, [rax+8]\n",
                 "  xor rax, rax\n",
                 "  xor rdi, rdi\n",
-                "  mov rsi, rsp\n",
                 "  mov rdx, [rbp+24]\n",
                 "  syscall\n",
+                "  mov r15, [rbp-8]\n",
+                "  mov qword ptr [r15], rax\n",
+                "  mov rax, r15\n",
+                "  \n",
+                "  mov r15, [rax]\n",
+                "  sub r15, 1\n",
+                "  lea rdx, [rax+8]\n",
+                "  add rdx, r15\n",
+                "  cmp byte ptr [rdx], 0x0a\n",
+                "  jne 1f\n",
+                "  mov byte ptr [rdx], 0\n",
+                "  sub qword ptr [rax], 1\n",
+                "  mov qword ptr [rbp-8], rax\n",
+                "  1:\n",
                 "  call strint\n",
                 "  add rsp, 8\n",
+                "  pop rbp\n",
+                "  pop rsp\n",
+                "  ret\n",
+                "strcon:\n",
+                "  push rsp\n",
+                "  push rbp\n",
+                "  mov rbp, rsp\n",
+                "  sub rsp, 16\n",
+                "  mov rdi, [rbp+24]\n",
+                "  inc qword ptr [rdi-8]\n",
+                "  mov rdi, [rdi]\n",
+                "  mov rbx, [rbp+32]\n",
+                "  inc qword ptr [rbx-8]\n",
+                "  mov rbx, [rbx]\n",
+                "  mov r15, rdi\n",
+                "  add r15, rbx\n",
+                "  add r15, 8\n",
+                "  push r15\n",
+                "  call heapalloc\n",
+                "  mov r15, [rsp]\n",
+                "  sub r15, 8\n",
+                "  mov qword ptr [rax], r15\n",
+                "  add rsp, 8\n",
+                "  mov rbx, [rbp+32]\n",
+                "  mov r15, 0\n",
+                "  mov rsi, [rbx]\n",
+                "  lea rax, [rax+8]\n",
+                "  0:\n",
+                "    cmp r15, rsi\n",
+                "    je 1f\n",
+                "    mov qword ptr [rbp-8], rbx\n",
+                "    mov rbx, [rbp+32]\n",
+                "    lea rbx, [rbx+8]\n",
+                "    mov bl, byte ptr [rbx+r15]\n",
+                "    mov byte ptr [rax+r15], bl\n",
+                "    mov rbx, [rbp-8]\n",
+                "    inc r15\n",
+                "    jmp 0b\n",
+                "  1:\n",
+                "  lea rax, [rax-8]\n",
+                "  mov rbx, [rbp+24]\n",
+                "  mov rsi, [rbx]\n",
+                "  lea rax, [rax+r15]\n",
+                "  lea rax, [rax+8]\n",
+                "  mov qword ptr [rbp-16], r15\n",
+                "  mov r15, 0\n",
+                "  0:\n",
+                "    cmp r15, rsi\n",
+                "    je 1f\n",
+                "    mov qword ptr [rbp-8], rbx\n",
+                "    mov rbx, [rbp+24]\n",
+                "    lea rbx, [rbx+8]\n",
+                "    mov bl, byte ptr [rbx+r15]\n",
+                "    mov byte ptr [rax+r15], bl\n",
+                "    mov rbx, [rbp-8]\n",
+                "    inc r15\n",
+                "    jmp 0b\n",
+                "  1:\n",
+                "  mov r15, [rbp-16]\n",
+                "  sub rax, r15\n",
+                "  lea rax, [rax-8]\n",
+                "  mov rdi, [rbp+24]\n",
+                "  dec qword ptr [rdi-8]\n",
+                "  mov rbx, [rbp+32]\n",
+                "  dec qword ptr [rbx-8]\n",
+                "  add rsp, 16\n",
+                "  pop rbp\n",
+                "  pop rsp\n",
+                "  ret\n",
+                "strlen:\n",
+                "  push rsp\n",
+                "  push rbp\n",
+                "  mov rbp, rsp\n",
+                "  mov rax, [rbp+24]\n",
+                "  mov rax, [rax]\n",
+                "  pop rbp\n",
+                "  pop rsp\n",
+                "  ret\n",
+                "objlen:\n",
+                "  push rsp\n",
+                "  push rbp\n",
+                "  push rdx\n",
+                "  mov rbp, rsp\n",
+                "  mov rax, [rbp+24]\n",
+                "  mov rax, [rax-16]\n",
+                "  sub rax, 16\n",
+                "  mov r15, 8\n",
+                "  xor rdx, rdx\n",
+                "  div r15\n",
+                "  pop rdx\n",
+                "  pop rbp\n",
+                "  pop rsp\n",
+                "  ret\n",
+                "equals:\n",
+                "  push rsp\n",
+                "  push rbp\n",
+                "  mov rbp, rsp\n",
+                "  mov rax, [rbp+24]\n",
+                "  mov rbx, [rbp+32]\n",
+                "  mov r15, [rax-16]\n",
+                "  cmp r15, [rbx-16]\n",
+                "  jle 1f\n",
+                "  mov r15, [rbx-16]\n",
+                "  1:\n",
+                "  mov rdi, r15\n",
+                "  sub rdi, 24\n",
+                "  3:\n",
+                "    cmp rdi, -1\n",
+                "    jle 4f\n",
+                "    mov r15, [rax+rdi]\n",
+                "    cmp r15, [rbx+rdi]\n",
+                "    jne 0f\n",
+                "    sub rdi, 8\n",
+                "    jmp 3b\n",
+                "  4:\n",
+                "  mov rax, 1\n",
+                "  jmp 1f\n",
+                "  0:\n",
+                "  mov rax, -1\n",
+                "  1:\n",
+                "  pop rbp\n",
+                "  pop rsp\n",
+                "  ret\n",
+                "input:\n",
+                "  push rsp\n",
+                "  push rbp\n",
+                "  push rdx\n",
+                "  mov rbp, rsp\n",
+                "  mov rax, [rbp+32]\n",
+                "  add rax, 8\n",
+                "  push rax\n",
+                "  call heapalloc\n",
+                "  add rsp, 8\n",
+                "  lea rax, [rax+8]\n",
+                "  mov r15, rax\n",
+                "  xor rax, rax\n",
+                "  xor rdi, rdi\n",
+                "  mov rsi, r15\n",
+                "  mov rdx, [rbp+32]\n",
+                "  syscall\n",
+                "  mov rdi, rax\n",
+                "  mov rax, r15\n",
+                "  lea rax, [rax-8]\n",
+                "  mov qword ptr [rax], rdi\n",
+                "  add rdi, 7\n",
+                "  cmp byte ptr [rax+rdi], 0x0a\n",
+                "  jne 1f\n",
+                "  mov byte ptr [rax+rdi], 0\n",
+                "  dec qword ptr [rax]\n",
+                "  1:\n",
+                "  dec qword ptr [rax-8]\n",
+                "  pop rdx\n",
+                "  pop rbp\n",
+                "  pop rsp\n",
+                "  ret\n",
+                "_strsplit:\n",
+                "  push rsp\n",
+                "  push rbp\n",
+                "  push rdx\n",
+                "  mov rbp, rsp\n",
+                "  sub rsp, 8\n",
+                "  jmp 11f\n",
+                "  10:\n",
+                "    mov rax, 0x000000203a727245\n",
+                "    push rax\n",
+                "    mov rax, 1\n",
+                "    mov rdi, 1\n",
+                "    mov rsi, rsp\n",
+                "    mov rdx, 5\n",
+                "    syscall\n",
+                "    mov rax, 0x6563696c53646142\n",
+                "    push rax\n",
+                "    mov rsi, rsp\n",
+                "    mov rax, 1\n",
+                "    mov rdx, 8\n",
+                "    syscall\n",
+                "    add rsp, 16\n",
+                "    push 0\n",
+                "    call exit\n",
+                "  11:\n",
+                "  mov rax, [rbp+40]\n",
+                "  mov rbx, [rbp+56]\n",
+                "  mov rbx, [rbx]\n",
+                "  cmp rax, rbx\n",
+                "  jle 0f\n",
+                "  mov qword ptr [rbp+40], rbx\n",
+                "  0:\n",
+                "  cmp qword ptr [rbp+32], 0\n",
+                "  jl 0f\n",
+                "  cmp qword ptr [rbp+32], 0\n",
+                "  je 10b\n",
+                "  mov rax, [rbp+40]\n",
+                "  sub rax, [rbp+48]\n",
+                "  cmp rax, 0\n",
+                "  jl 10b\n",
+                "  mov rbx, [rbp+32]\n",
+                "  sub rbx, 1\n",
+                "  add rax, rbx\n",
+                "  add rbx, 1\n",
+                "  xor rdx, rdx\n",
+                "  div rbx\n",
+                "  jmp 1f\n",
+                "  0:\n",
+                "  mov rax, [rbp+48]\n",
+                "  sub rax, [rbp+40]\n",
+                "  cmp rax, 0\n",
+                "  jl 10b\n",
+                "  mov rbx, [rbp+32]\n",
+                "  neg rbx\n",
+                "  xor rdx, rdx\n",
+                "  div rbx\n",
+                "  cmp rdx, 0\n",
+                "  je 1f\n",
+                "  inc rax\n",
+                "  1:\n",
+                "  mov rsi, [rbp+56]\n",
+                "  mov rsi, [rsi]\n",
+                "  cmp qword ptr [rbp+48], rsi\n",
+                "  jge 10b\n",
+                "  cmp qword ptr [rbp+48], 0\n",
+                "  jl 10b\n",
+                "  cmp qword ptr [rbp+40], -1\n",
+                "  jl 10b\n",
+                "  add rax, 8\n",
+                "  mov qword ptr [rbp-8], rax\n",
+                "  push rax\n",
+                "  call heapalloc\n",
+                "  add rsp, 8\n",
+                "  mov rbx, [rbp-8]\n",
+                "  mov rsi, [rbp+56]\n",
+                "  xor rdx, rdx\n",
+                "  add rdx, [rbp+48]\n",
+                "  mov rdi, 8\n",
+                "  cmp qword ptr [rbp+32], 0\n",
+                "  jg 4f\n",
+                "  0:\n",
+                "    cmp rdx, 0\n",
+                "    jl 1f\n",
+                "    cmp rdi, rbx\n",
+                "    jge 1f\n",
+                "    add rdx, 8\n",
+                "    mov r15b, [rsi+rdx]\n",
+                "    sub rdx, 8\n",
+                "    mov byte ptr [rax+rdi], r15b\n",
+                "    inc rdi\n",
+                "    add rdx, [rbp+32]\n",
+                "    jmp 0b\n",
+                "  1:\n",
+                "  jmp 1f\n",
+                "  4:\n",
+                "    cmp rdx, [rsi]\n",
+                "    jge 1f\n",
+                "    cmp rdi, rbx\n",
+                "    jge 1f\n",
+                "    add rdx, 8\n",
+                "    mov r15b, [rsi+rdx]\n",
+                "    sub rdx, 8\n",
+                "    mov byte ptr [rax+rdi], r15b\n",
+                "    inc rdi\n",
+                "    add rdx, [rbp+32]\n",
+                "    jmp 4b\n",
+                "  1:\n",
+                "  sub rdi, 8\n",
+                "  mov qword ptr [rax], rdi\n",
+                "  add rsp, 8\n",
+                "  pop rdx\n",
                 "  pop rbp\n",
                 "  pop rsp\n",
                 "  ret\n"
             ]
         total_vars = []
         varIsFunc = {}
+        #self.varTypes = prevVarTypes
         for tree in self.tokens:
             if (type(tree) is AssignmentNode and tree.value not in total_vars) or (type(tree) is FunctionAssign and tree.name not in total_vars):
                 try:
@@ -1227,18 +1868,35 @@ class CodeGenerator():
             self.addLine("push rsp")
             self.addLine("push rbp")
             self.addLine("mov rbp, rsp")
-            self.addLine(f"sub rsp, {local_var_count*8}")
+            if not (ret and not prevVars and not args and not objVars and not self.isFunc):
+                self.addLine(f"sub rsp, {local_var_count*8}")
             for v in range(1, local_var_count+1):
                 v *= 8
-                self.addLine(f"mov qword ptr [rbp-{v}], 0")
-            self.addLine("")
+                if not (ret and not prevVars and not args and not objVars and not self.isFunc):
+                    self.addLine(f"mov qword ptr [rbp-{v}], 0")
+            for var, varType in objVars.items():
+                if not (varType.isType(TokenType.INT) or varType.isType(TokenType.FLOAT) or varType.isType(TokenType.BOOL)):
+                    varTypes[var] = "object"
+                    self.addLine(f"mov r15, {self.getVarLoc(var)}")
+                    self.addLine(f"inc qword ptr [r15-8]")
+                else:
+                    varTypes[var] = "native"
 
         for tree in self.tokens:
             self.addLine("")
             self.traverse_tree(tree, True, args)
         if len(args) == 0:
             self.addLine("99:")
-            self.addLine(f"add rsp, {local_var_count*8}")
+            # for var in objVars:
+            #     if varTypes[var] == "object":
+            #         self.addLine(f"mov r15, {self.getVarLoc(var)}")
+            #         self.addLine(f"dec qword ptr [r15-8]")
+            for var in self.vars:
+                if var in varTypes and varTypes[var] == "object":
+                    self.addLine(f"mov r15, {self.getVarLoc(var)}")
+                    self.addLine("dec qword ptr [r15-8]")
+            if not (ret and not prevVars and not args and not objVars and not self.isFunc):
+                self.addLine(f"add rsp, {local_var_count*8}")
             self.addLine("pop rbp")
             self.addLine("pop rsp")
 
@@ -1254,10 +1912,13 @@ class CodeGenerator():
             self.addFunc(func)
         if not ret:
             #self.addLine("ret")
-            return self.text + self.main
+            return self.text + self.main, self.rodata
         if "main" in args:
-            return self.main
-        return [".intel_syntax noprefix\n", ".global _start\n", ".data\n"] + self.data + [".text\n"] + self.text + ["_start:\n"] + self.main
+            return self.main, self.rodata
+
+        first_half = [".intel_syntax noprefix\n", ".global _start\n", ".section .rodata\n"] + self.rodata + [".data\n"] + self.data
+        second_half = [".text\n"] + self.text + ["_start:\n"] + self.main
+        return first_half + second_half
 
     def countVars(self, node, ret, args):
         if type(node) is AssignmentNode:
@@ -1301,10 +1962,11 @@ class CodeGenerator():
         if regOrVal != 0:
             self.setVarAsm(var, regOrVal)
 
+    
     def addFunc(self, funcNode: FunctionAssign):
         local = {}                                                                      # all locals in function
         count = len(funcNode.args)                                                      # num of all locals in function
-        for var in funcNode.args:
+        for var, varType in funcNode.args.items():
             local[var] = f"[rbp+{16+8*count}]"                                          # sets all local memory locations
             count -= 1                                                                  # updates local count
         local["%parent"] = self.vars
@@ -1314,13 +1976,20 @@ class CodeGenerator():
             for key in reference:                                                       # loop through reference to change locals without discarding info
                 if len(reference[key]) >= 7 and key != "%parent" and reference[key][1:5] == "rbp+":
                     reference[key] = reference[key][0] + "r10+" + reference[key][5:]    # replace if not in current scope
-        gen = CodeGenerator(ProgramNode(funcNode.code), True).Generate(False, local)    # gets function body code
+        main = CodeGenerator(ProgramNode(funcNode.code), True).Generate(False, local, [], funcNode.args)
+        readOnly = main[1]
+        main = main[0]
+        self.rodata += readOnly
+        #gen = CodeGenerator(ProgramNode(funcNode.code), True).Generate(False, local)    # gets function body code
         self.addText(f"{funcNode.name}:")                                               # funcname:
-        self.text += gen                                                                #   body
+        self.text += main #gen                                                                #   body
 
     
     def loadVarAsm(self, var, reg):
-        self.addLine(f"mov {reg}, {self.getVarLoc(var)}")
+        if not var in self.rodataMap:
+            self.addLine(f"mov {reg}, {self.getVarLoc(var)}")
+        else:
+            self.addLine(f"lea {reg}, {self.rodataMap[var]}")
     
     def setVarAsm(self, var, regOrVal):
         self.addLine(f"mov {self.getVarLoc(var)}, {regOrVal}")
@@ -1331,6 +2000,17 @@ class CodeGenerator():
         self.text.append(txt + "\n")
     def addData(self, txt: str):
         self.data.append(txt + ": .quad 0\n")
+    def addRoData(self, data, body):
+        if type(data) is list:
+            newdata = ""
+            for v in data:
+                newdata += v
+            data = newdata
+        if not data in self.rodataMap:
+            self.rodataMap[data] = next(getRoDataLabel)
+            self.rodata.append(self.rodataMap[data] + ":\n")
+            for v in body:
+                self.rodata.append(v + "\n")
 
     def isNode(self, tree):
         exclude = not type(tree) is AssignmentNode and not type(tree) is UnaryNode and not type(tree) is FunctionCall and not type(tree) is LOOPMODNode
@@ -1429,25 +2109,43 @@ class CodeGenerator():
             self.addLine("add rsp, 8")
             self.addLine(f"mov {valOrReg}, rax")
 
+    def retIsObj(self, item: EndNode):
+        return not ((type(item) is INTNode) or (type(item) is FLOATNode) or (type(item) is BOOLNode))
+
     def traverse_tree(self, tree, first=False, args: list=[]):
         if type(tree) is FunctionCall:
+            undo = []
             for arg in tree.args if not (tree.name.lower() == "print" or tree.name.lower() == "println") else tree.args[::-1]:
-                self.traverse_tree(arg, False, ["print"] if tree.name.lower() == "print" or tree.name.lower() == "println" else [])
-                if tree.name.lower() == "print" or tree.name.lower() == "println":
-                    self.addLine("call intstr")
-                    self.addLine("add rsp, 8")
-                    self.addLine("push rax")
+                retType = self.traverse_tree(arg, False, ["print", "nonliteral"] if tree.name.lower() == "print" or tree.name.lower() == "println" else ["nonliteral"])
+                print(retType)
+                undo.append(retType)
             if tree.name.lower() == "print" or tree.name.lower() == "println":
                 self.addLine(f"push {len(tree.args)}")
+                undo.append("")
             elif len(tree.args) == 0 and tree.name.lower() == "exit":
                 self.addLine("push 0")
                 self.addLine("call exit")
                 return
             self.addLine(f"call {tree.name}")
+            for i in range(len(undo)):
+                var = undo[i]
+                if var == "object":
+                    self.addLine(f"mov r15, [rsp+{(len(undo)-1-i)*8}]")
+                    self.addLine(f"sub qword ptr [r15-8], 1")
             self.addLine(f"add rsp, {len(tree.args)*8 + (8 if tree.name.lower() == "print" or tree.name.lower() == "println" else 0)}")
             if not first:
                 self.addLine("push rax")
-            return
+            baked = SemanticAnalyzer(ProgramNode([])).baked_functions
+            #obj = self.retIsObj(tree.retType) and not tree.name in baked
+            nat = (baked[tree.name] is INTNode) or (baked[tree.name] is FLOATNode) or (baked[tree.name] is BOOLNode)
+            if "print" in args and nat:
+                self.addLine("call intstr")
+                self.addLine("add rsp, 8")
+                self.addLine("push rax")
+            if tree.name in baked and nat:
+                return "native"
+            print(tree.name, nat)
+            return "objectvar" if not nat else "native"
         if type(tree) is OperationNode:
             self.traverse_tree(tree.left)
             self.traverse_tree(tree.right)
@@ -1458,22 +2156,22 @@ class CodeGenerator():
                 self.addLine("push rcx\n")
             if first:
                 self.addLine("mov rax, rcx\n")
-            return
+            return "native"
 
         if type(tree) is CONDMODNode:
-            self.traverse_tree(tree.left)
-            self.traverse_tree(tree.right)
+            type1 = self.traverse_tree(tree.left)
+            type2 = self.traverse_tree(tree.right)
             self.addLine("pop rdx")
             self.addLine("pop rcx")
             self.insertOperation("rcx", tree.mod, "rdx")
             self.addLine("push rcx")
-            return
+            return "native"
 
         if type(tree) is IFNode:            # must use unique letter names for each if statement, or nested functions will get confused or reuse already used names
             startLabel = next(getIfStartLabel)
             elseLabel = next(getIfElseLabel)
             endLabel = next(getIfEndLabel)
-            self.traverse_tree(tree.conditions, False)
+            self.traverse_tree(tree.conditions, False, args)
             # always a CONDMOD node, traverse it and insert cmp statements at and/or ops
             
             self.addLine("pop rax")
@@ -1481,11 +2179,21 @@ class CodeGenerator():
             self.addLine(f"jne {elseLabel}")
 
             self.addLine(f"{startLabel}:")
-            self.main += CodeGenerator(ProgramNode(tree.code), False).Generate(False, self.vars, ["main"])
+            main = CodeGenerator(ProgramNode(tree.code), False).Generate(False, self.vars, ["main"] + args)
+            readOnly = main[1]
+            main = main[0]
+            self.main += main
+            self.rodata += readOnly
+            #self.main += CodeGenerator(ProgramNode(tree.code), False).Generate(False, self.vars, ["main"])
             self.addLine(f"jmp {endLabel}")
             self.addLine(f"{elseLabel}:")
             if len(tree.codeelse) > 0:
-                self.main += CodeGenerator(ProgramNode(tree.codeelse), False).Generate(False, self.vars, ["main"])
+                main = CodeGenerator(ProgramNode(tree.codeelse), False).Generate(False, self.vars, ["main"] + args)
+                readOnly = main[1]
+                main = main[0]
+                self.rodata += readOnly
+                self.main += main
+                #self.main += CodeGenerator(ProgramNode(tree.codeelse), False).Generate(False, self.vars, ["main"])
             self.addLine(f"{endLabel}:")
             return
 
@@ -1497,11 +2205,16 @@ class CodeGenerator():
             self.addLine(f"{startLabel}:")
 
             self.traverse_tree(tree.conditions, False)
-            # always a CONDMOD node, traverse it and insert cmp statements at and/or ops
+            # NOT always a CONDMOD node, traverse it and insert cmp statements at and/or ops
             self.addLine("pop rax")
             self.addLine("cmp rax, 1")
             self.addLine(f"jne {endLabel}")
-            self.main += CodeGenerator(ProgramNode(tree.code), False).Generate(False, self.vars, ["main", "continueLabel", contLabel, "breakLabel", brkLabel])
+            main = CodeGenerator(ProgramNode(tree.code), False).Generate(False, self.vars, ["main", "continueLabel", contLabel, "breakLabel", brkLabel])
+            readOnly = main[1]
+            main = main[0]
+            self.main += main
+            self.rodata += readOnly
+            #self.main += CodeGenerator(ProgramNode(tree.code), False).Generate(False, self.vars, ["main", "continueLabel", contLabel, "breakLabel", brkLabel])
             self.addLine(f"{contLabel}:")
             self.addLine(f"jmp {startLabel}")
             self.addLine(f"{brkLabel}:")
@@ -1520,46 +2233,240 @@ class CodeGenerator():
             return
 
         if type(tree) is FunctionReturn:
-            self.traverse_tree(tree.value)
+            retType = self.traverse_tree(tree.value, False, ["nonliteral"])
             self.addLine(f"pop rax")
             self.addLine("jmp 99f")
-            return
+            return retType
         
         if type(tree) is UnaryNode:
             self.traverse_tree(tree.value)
             self.addLine("pop rcx")
             self.insertUnary("rcx", tree.operation)
             self.addLine("push rcx")
-            return
+            return "native"
 
         if type(tree) is AssignmentNode:
+            inTmp = False
+            if tree.identifier in self.vars and tree.identifier in varTypes and varTypes[tree.identifier] == "object":
+                inTmp = True
+                self.addLine(f"mov r15, {self.getVarLoc(tree.identifier)}")
+                self.addLine("mov qword ptr [_tmpvar], r15")
+                #self.addLine(f"mov r15, {self.getVarLoc(tree.identifier)}")
+                #self.addLine("dec qword ptr [r15-8]")
             self.addVar(tree.identifier)
-            self.traverse_tree(tree.value)
+            newType = self.traverse_tree(tree.value, False, ["nonliteral"])
+            varTypes[tree.identifier] = newType if not "var" in newType else newType[:-3]
             if first:
                 self.addLine("pop rax")
+            if newType == "objectvar":
+                self.addLine("inc qword ptr [rax-8]")
             self.setVarAsm(tree.identifier, "rax")
+            if inTmp:
+                self.addLine("mov r15, [_tmpvar]")
+                self.addLine("dec qword ptr [r15-8]")
             return
+
+        if type(tree) is BracketUse:
+            self.traverse_tree(tree.item, False)
+            if tree.isSlice:
+                treeargs = tree.args + ([":"]*(3-len(tree.args)))
+                print(treeargs)
+                for i in range(3):
+                    arg = treeargs[i]
+                    if type(arg) != str:
+                        self.traverse_tree(arg)
+                    else:
+                        if i == 0:
+                            if arg == ":" and type(treeargs[2]) is str and treeargs[2][0] == "-":
+                                self.addLine("mov r15, [rsp]")
+                                self.addLine("mov r15, [r15]")
+                                self.addLine("dec r15")
+                                self.addLine("push r15")
+                            elif arg != ":":
+                                self.addLine(f"push {arg}")
+                            else:
+                                self.addLine("push 0")
+                        elif i == 1:
+                            if arg == ":" and type(treeargs[2]) is str and treeargs[2][0] == "-":
+                                self.addLine("push -1")
+                            elif arg != ":":
+                                self.addLine(f"push {arg}")
+                            else:
+                                self.addLine("mov r15, [rsp+8]")
+                                self.addLine("push qword ptr [r15]")
+                        else:
+                            if arg == ":":
+                                self.addLine("push 1")
+                            else:
+                                self.addLine(f"push {arg}")
+                self.addLine("call _strsplit")
+                self.addLine("add rsp, 32")
+                self.addLine("push rax")
+                return "object"
+            else:
+                if type(tree.args[0]) is str:
+                    self.addLine(f"push {tree.args[0]}")
+                    self.addLine(f"mov r15, {tree.args[0]}")
+                else:
+                    self.traverse_tree(tree.args[0])
+                    self.addLine("mov r15, [rsp]")
+                self.addLine("inc r15")
+                self.addLine("push r15")
+                self.addLine("push 1")
+                self.addLine("call _strsplit")
+                self.addLine("add rsp, 32")
+                self.addLine("push rax")
+                return "object"
 
         if self.isNode(tree):
             if type(tree) is INTNode:
                 self.addLine(f"push {tree.value}")
-                return
+                if "print" in args:
+                    self.addLine("call intstr")
+                    self.addLine("add rsp, 8")
+                    self.addLine("push rax")
+                return "native"
             if type(tree) is BOOLNode:
                 self.addLine(f"push {1 if tree.value == True else -1}")
-                return
+                if "print" in args:
+                    self.addLine("call intstr")
+                    self.addLine("add rsp, 8")
+                    self.addLine("push rax")
+                return "native"
             if type(tree) is IDENTIFIERNode:
                 self.addLine(f"push {self.getVarLoc(tree.value)}")
-                return
+                if "print" in args and varTypes[tree.value] == "native":
+                    self.addLine("call intstr")
+                    self.addLine("add rsp, 8")
+                    self.addLine("push rax")
+                return varTypes[tree.value] + "var"
             if type(tree) is NONENode:
                 self.addLine("push 0")
+                if "print" in args:
+                    self.addLine("call intstr")
+                    self.addLine("add rsp, 8")
+                    self.addLine("push rax")
                 return
+            if type(tree) is STRINGNode:
+                if "nonliteral" in args:
+                    byteAmt = 16
+                    value = tree.value
+                    size = len(value)+9
+                    while byteAmt < size:
+                        byteAmt += 16
+                    self.addLine(f"mov r15, {byteAmt}")
+                    self.addLine(f"push r15")
+                    self.addLine("call heapalloc")
+                    self.addLine("add rsp, 8")
+                    self.addLine(f"mov qword ptr [rax], {len(value)}")
+                    for i in range((len(value) + 3) // 4, -1, -1):
+                        chars = ""
+                        for v in range(3, -1, -1):
+                            index = i*4+v
+                            if index < len(value):
+                                chars += value[index]
+                            else:
+                                chars = "00" + chars
+                        if chars == "00000000":
+                            continue
+                        self.addLine(f"mov dword ptr [rax+{i*4+8}], 0x{chars}")
+                else:
+                    string = ""
+                    for v in tree.value:
+                        string += v
+                    string = bytes.fromhex(string).decode("utf-8")
+                    self.addRoData(string, [f".quad {len(tree.value)}", f".ascii \"{string}\""])
+                    self.addLine(f"lea rax, {self.rodataMap[string]}")
+                self.addLine("push rax")
+                return "object"
 
         raise SyntaxError(f"Forgot to add {tree} here")
+
+
+class Optimizer():
+    def __init__(self, source: list[str]):
+        self.source = source
+    
+    def Optimize(self) -> list[str]:
+        push1 = ""
+        push2 = ""
+        push1ln = 0
+        push2ln = 0
+        start = self.source.index("input:\n")
+        for i in range(len(self.source)-start):
+            i += start
+            # if i <= 500:
+            #     continue
+            line = self.source[i]
+            if not line:
+                continue
+            elif "rsp" in line or "rbp" in line:
+                continue
+            elif line[:4] == "push":
+                if not push1:
+                    push1 = line[5:]
+                    push1ln = i
+                elif not push2:
+                    push2 = line[5:]
+                    push2ln = i
+                else:
+                    push1 = push2
+                    push1ln = push2ln
+                    push2 = line[5:]
+                    push2ln = i
+            elif line[:3] == "pop":
+                if push2:
+                    self.source[push2ln] = ""
+                    self.source[i] = f"mov {line[4:-1]}, {push2}\n"
+                    push2 = ""
+                elif push1:
+                    self.source[push1ln] = ""
+                    self.source[i] = f"mov {line[4:-1]}, {push1}\n"
+                    push1 = ""
+
+        mov = ""
+        movln = 0
+        for i in range(len(self.source)-start):
+            i += start
+            # if i <= 500:
+            #     continue
+            line = self.source[i]
+            if not line:
+                continue
+            elif line[:3] == "mov":
+                builtreg = line[4:line.index(",")]
+                if not "[" in builtreg:
+                    built = line[line.rindex(",")+2:line.index("\n")]
+                    if not "[" in built:
+                        mov = (builtreg, built)
+                        movln = i
+                    else:
+                        mov = ""
+                elif mov:
+                    built = line[line.rindex(",")+2:line.index("\n")]
+                    if built == mov[0]:
+                        if "[" in builtreg:
+                            self.source[movln] = f"mov qword ptr {builtreg}, {mov[1]}\n"
+                        else:
+                            self.source[movln] = f"mov {builtreg}, {mov[1]}\n"
+                        self.source[i] = ""
+
+        newList = []
+        for v in self.source:
+            if not v or v.count("\n") == len(v):
+                continue
+            while v.endswith("\n\n"):
+                v = v[:-1]
+            if v[:3] == "mov":
+                if v[4:v.index(",")] == v[v.index(",")+2:-1]:
+                    continue
+            newList.append(v)
+        return newList
 
 
 
 
 if __name__ == "__main__":
-    out = Compiler("./Input.kog").Compile()
-    with open("./Output.s", "w") as output:
+    out = Compiler("./VSCode/Python/Compiler/Input.kog").Compile()
+    with open("./VSCode/Python/Compiler/Output.s", "w") as output:
         output.writelines(out)
