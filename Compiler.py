@@ -41,7 +41,9 @@ class Lexer():
             "<": [TokenCategory.OPERATOR, TokenType.LESS_THAN[1]],
             ">": [TokenCategory.OPERATOR, TokenType.GREATER_THAN[1]],
             "<=": [TokenCategory.OPERATOR, TokenType.LESS_EQUALS[1]],
-            ">=": [TokenCategory.OPERATOR, TokenType.GREATER_EQUALS[1]]
+            ">=": [TokenCategory.OPERATOR, TokenType.GREATER_EQUALS[1]],
+            "=<": [TokenCategory.OPERATOR, TokenType.LESS_EQUALS[1]],
+            "=>": [TokenCategory.OPERATOR, TokenType.GREATER_EQUALS[1]]
         }
         self.operations = {
             "=": [TokenCategory.SETTER, TokenType.EQUALS[1]],
@@ -183,6 +185,8 @@ class Lexer():
             if not self.line or nl:
                 break
             glanced = self.glance()
+        if built == "=<" or built == "=>":
+            built = built[::-1]
         result = self.comparators.get(built) or self.operations.get(built)
         return Token(result[0], result[1], built)
 
@@ -2395,13 +2399,13 @@ class Optimizer():
         push2 = ""
         push1ln = 0
         push2ln = 0
-        start = self.source.index("input:\n")
+        start = self.source.index("_strsplit:\n")
         for i in range(len(self.source)-start):
             i += start
             line = self.source[i]
             if not line:
                 continue
-            elif "rsp" in line or "rbp" in line:
+            elif line == "push rsp" or line == "pop rsp" or line == "push rbp" or line == "pop rbp" or ":" in line:
                 push1 = ""
                 push1ln = 0
                 push2 = ""
@@ -2433,8 +2437,6 @@ class Optimizer():
         movln = 0
         for i in range(len(self.source)-start):
             i += start
-            # if i <= 500:
-            #     continue
             line = self.source[i]
             if not line:
                 continue
@@ -2472,6 +2474,6 @@ class Optimizer():
 
 
 if __name__ == "__main__":
-    out = Compiler("./VSCode/Python/Compiler/Input.kog").Compile()
-    with open("./VSCode/Python/Compiler/Output.s", "w") as output:
+    out = Compiler("./Input.kog").Compile()
+    with open("./Output.s", "w") as output:
         output.writelines(out)
