@@ -43,7 +43,9 @@ class Lexer():
             "<=": [TokenCategory.OPERATOR, TokenType.LESS_EQUALS[1]],
             ">=": [TokenCategory.OPERATOR, TokenType.GREATER_EQUALS[1]],
             "=<": [TokenCategory.OPERATOR, TokenType.LESS_EQUALS[1]],
-            "=>": [TokenCategory.OPERATOR, TokenType.GREATER_EQUALS[1]]
+            "=>": [TokenCategory.OPERATOR, TokenType.GREATER_EQUALS[1]],
+            "->": [TokenCategory.OPERATOR, TokenType.GREATER_THAN[1]],
+            "-": None
         }
         self.operations = {
             "=": [TokenCategory.SETTER, TokenType.EQUALS[1]],
@@ -169,10 +171,14 @@ class Lexer():
             isApplicable = get_applicable()
         upper = built.upper()
         isInTable = False
-        if upper in TokenType.parse_for:
+        if upper in TokenType.parse_for or built in TokenType.parse_for:
             isInTable = True
-            upper = TokenType.parse_for[upper]
+            if upper in TokenType.parse_for:
+                upper = TokenType.parse_for[upper]
+            else:
+                upper = TokenType.parse_for[built]
         token_return_type = getattr(TokenType, upper) if isInTable else token_return_type
+        #token_return_type = getattr(TokenType, token_return_type[1]) if token_return_type[1] in TokenType.parse_for else token_return_type
         return Token(token_return_type[0], token_return_type[1], built)
 
     # reads a sequence of special characters like "=" or "=="
@@ -283,7 +289,10 @@ class Token():
         self.value = value
 
     def isChildOf(self, type: TokenType):
-        parent = getattr(TokenType, self.type)[2]
+        parent = getattr(TokenType, self.type, None)
+        if not parent or len(parent) <= 2:
+            return False
+        parent = parent[2]
         while parent[1] != type[1]:
             if len(parent) <= 2:
                 return False
@@ -305,8 +314,20 @@ class Token():
             return BOOLNode
         if self.isType(TokenType.STRING):
             return STRINGNode
+        if self.isType(TokenType.ARRAY):
+            return ARRAYNode
         if self.isType(TokenType.NONE):
             return NONENode
+
+    def getAsStr(self):
+        if self.isType(TokenType.INT) or self.isType(TokenType.FLOAT) or self.isType(TokenType.BOOL):
+            return "native"
+        elif self.isType(TokenType.NONE):
+            return "none"
+        elif self.isType(TokenType.ARRAY):
+            return "objectarray"
+        else:
+            return "object"
 
     def __str__(self):
         return f"Token:[{self.category}, {self.type}, {self.value}]\n"
@@ -329,6 +350,8 @@ class TokenType():
 
     TRUE = [TokenCategory.OBJECT, "TRUE", BOOL]
     FALSE = [TokenCategory.OBJECT, "FALSE", BOOL]
+
+    ARRAY = [TokenCategory.OBJECT, "ARRAY", TYPE_OBJECT]
 
     NONE = [TokenCategory.OBJECT, "NONE", CONSTANT]
 
@@ -391,19 +414,23 @@ class TokenType():
     CONTINUE = [TokenCategory.STATEMENT, "CONTINUE", STATEMENT]
     BREAK = [TokenCategory.STATEMENT, "CONTINUE", STATEMENT]
 
-    # FOR = [TokenCategory.STATEMENT, "FOR", STATEMENT]
+    FOR = [TokenCategory.STATEMENT, "FOR", STATEMENT]
     # EXEC = [TokenCategory.STATEMENT, "EXEC", STATEMENT]
     # FIN = [TokenCategory.STATEMENT, "FIN", STATEMENT]
 
     DEF = [TokenCategory.STATEMENT, "DEF", STATEMENT]
     RETURN = [TokenCategory.STATEMENT, "RETURN", STATEMENT]
-    parse_for = {
-        "DEF": "DEF", "RETURN": "RETURN",
-        "INT": "INT", "FLOAT": "FLOAT", "BOOL": "BOOL", "STRING": "STRING", "NONE": "NONE",
 
-        "IF": "IF", "THEN": "THEN", "END": "END", "AND": "AND", "OR": "OR", "ELSE": "ELSE",
-        "WHILE": "WHILE", "CONTINUE": "CONTINUE", "BREAK": "BREAK",
-        #"FOR": "FOR", "EXEC": "EXEC", "FIN": "FIN",
+    AS = [TokenCategory.STATEMENT, "AS", STATEMENT]
+    IN = [TokenCategory.STATEMENT, "IN", STATEMENT]
+    parse_for = {
+        "def": "DEF", "RETURN": "RETURN",
+        "int": "INT", "float": "FLOAT", "bool": "BOOL", "string": "STRING", "NONE": "NONE", "Str": "STRING",
+
+        "if": "IF", "end": "END", "AND": "AND", "OR": "OR", "else": "ELSE",
+        "while": "WHILE", "continue": "CONTINUE", "BREAK": "BREAK",
+        "Array": "ARRAY", "as": "AS", "native": "INT", "Nat": "INT", "Obj": "TYPE_OBJECT", "object": "TYPE_OBJECT", "Arr": "ARRAY",
+        "FOR": "FOR", "in": "IN",
         "TRUE": "TRUE", "FALSE": "FALSE"
     }
 
@@ -413,6 +440,7 @@ class Parser():
         self.token_source = token_source
         self.token_source_len = len(token_source)
         self.token_index = 0
+        self.arrays = []
         self.trees = []
 
     def token(self, in_advance=0):
@@ -426,7 +454,7 @@ class Parser():
         if self.token().isType(TokenType.INT):
             self.advance()
             return INTNode(self.token(-1).value)
-        elif not skip and identStr and self.token(1) and self.token(1).isType(TokenType.B_OPEN):
+        elif (not skip and identStr and self.token(1) and self.token(1).isType(TokenType.B_OPEN)) or self.token().isType(TokenType.ARRAY):
             return self.parse_bracket()
         elif self.token().isType(TokenType.STRING):
             self.advance()
@@ -466,6 +494,8 @@ class Parser():
             value = self.parse_comparison()
             self.advance()
             return value
+        # elif self.token().isType(TokenType.B_OPEN):
+        #     return BracketUse()
         raise SyntaxError(f"Invalid pattern, got: {self.token()}.")
     
 
@@ -544,16 +574,18 @@ class Parser():
         self.advance()
         name = self.token().value
         self.advance(2)
-        print(self.token())
         while self.token() and not self.token().isType(TokenType.P_CLOSE):
-            print(self.token())
             args[self.token(1).value] = self.token()
             self.advance(2)
-            print(self.token())
             while self.token().isType(TokenType.COMMA) or self.token(1).isType(TokenType.COMMA):
                 self.advance()
             if self.token().isType(TokenType.P_CLOSE):
                 break
+        for var, typ in args.items():
+            if typ.isType(TokenType.ARRAY):
+                self.arrays.append(var)
+            elif var in self.arrays:
+                self.arrays.remove(var)
         self.advance()
         code = []
         while not self.token().isType(TokenType.RETURN):
@@ -572,10 +604,10 @@ class Parser():
 
     def parse_if(self, nested=False):
         self.advance()
-        left = self.parse_statement()
+        left = self.parse_comparison()#statement
         while self.token().isChildOf(TokenType.COND_MOD):
             self.advance()
-            left = CONDMODNode(left, self.token(-1), self.parse_statement())    # changed to parse statement for now, was parse comparison
+            left = CONDMODNode(left, self.token(-1), self.parse_comparison())    # changed to parse statement for now, was parse comparison
         code = [self.parse_statement()]
         while self.token().isType(TokenType.EOL):
             self.advance()
@@ -610,40 +642,119 @@ class Parser():
         while self.token().isType(TokenType.EOL):
             self.advance()
         self.advance()
-        print(self.token(-1), self.token(), self.token(1))
         return WHILENode(left, code)
 
-    def parse_bracket(self):
-        item = self.parse_value(True)
+    def parse_for(self):
         self.advance()
-        value = []
-        isSlice = False
-        i = 0
-        while not self.token(-1).isType(TokenType.B_CLOSE) and not self.token().isType(TokenType.B_CLOSE):
-            if self.token().isType(TokenType.COLON):
-                value.append(":")
+        var = self.parse_value()
+        self.advance()
+        item_parse = self.parse_statement()
+        self.advance()
+        code = []
+        while self.token() and not self.token().isType(TokenType.END):
+            code.append(self.parse_statement())
+            while self.token() and self.token().isType(TokenType.EOL):
+                self.advance()
+        while self.token() and self.token().isType(TokenType.EOL):
+            self.advance()
+        self.advance()
+        return FORNode(var.value, item_parse, code)
+
+    def parse_bracket(self, ident=None, parent=None):
+        isArray = self.token().isType(TokenType.ARRAY)
+        if not isArray:
+            if not ident:
+                item = self.parse_value(True)
+                self.advance()
+            else:
+                item = ident
+            value = []
+            isSlice = False
+            i = 0
+            firstItem = None
+            while not self.token(-1).isType(TokenType.B_CLOSE) and not self.token().isType(TokenType.B_CLOSE):
+                if self.token().isType(TokenType.COLON):
+                    value.append(":")
+                    self.advance()
+                    i += 1
+                    isSlice = True
+                    continue
+                value.append(self.parse_statement())
+                if not firstItem:
+                    firstItem = value[-1]
+                if str(value[-1]).lstrip("-").isdigit():
+                    firstItem = value[-1]
+                    value[-1] = str(value[-1])
+                if self.token().isType(TokenType.COLON):
+                    isSlice = True
                 self.advance()
                 i += 1
-                isSlice = True
-                continue
-            value.append(self.parse_statement())
-            if str(value[-1]).lstrip("-").isdigit():
-                value[-1] = str(value[-1])
-            if self.token().isType(TokenType.COLON):
-                isSlice = True
+            if i > 3:
+                raise SyntaxError("Too many \":\" present.")
+            if self.token() and self.token().isType(TokenType.B_CLOSE):
+                self.advance()
+            extract = ""
+            #if item.value in self.arrays:
+            #    print("awdkmnaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+            #    isSlice = True
+            if not isSlice and self.token().isType(TokenType.AS):
+                self.advance()
+                value[-1] = firstItem
+                extract = self.token().getAsStr()
+                self.advance()
+            elif not isSlice and self.token().isType(TokenType.EQUALS):
+                #extract = self.token().getAsStr()
+                self.advance()
+                ret = BracketUse(item if not parent else parent, value, isSlice, "", self.parse_statement())
+                return ret
+            if self.token() and self.token().isType(TokenType.B_OPEN):
+                self.advance()
+                ret = BracketUse(item if not parent else parent, value, isSlice, "objectarray")
+                ret: BracketUse = self.parse_bracket(item, ret)#BracketUse(item, value, isSlice, "objectarray") if parent else BracketUse(item, value, isSlice, "objectarray"))
+                #under.item = BracketUse(item, value, isSlice, under.extract)
+                return ret
+            return BracketUse(item if not parent else parent, value, isSlice, extract)
+        else:
             self.advance()
-            i += 1
-        if i > 3:
-            raise SyntaxError("Too many \":\" present.")
-        if self.token() and self.token().isType(TokenType.B_CLOSE):
+            length = INTNode(10)
+            contents = []
+            if self.token().isType(TokenType.GREATER_THAN):
+                self.advance(2)
+                while not self.token().isType(TokenType.B_CLOSE):
+                    while self.token().isType(TokenType.EOL):
+                        self.advance()
+                    if self.token().isType(TokenType.B_CLOSE):
+                        break
+                    if self.token().isType(TokenType.COMMA):
+                        self.advance()
+                    contents.append(self.parse_statement())
+                    if self.token() and self.token().isType(TokenType.COMMA):
+                        self.advance()
+                length = INTNode(len(contents))
+            else:
+                self.advance()
+                if not self.token().isType(TokenType.B_CLOSE):
+                    length = self.parse_statement()
+                else:
+                    length = INTNode(10)
+                #self.advance()
+                # is3 = self.token(3)
+                # if is3 and self.token(1).isType(TokenType.AS) and self.token(2).isType(TokenType.EQUALS) and self.token(3).isType(TokenType.IDENTIFIER):
+                #     extract = self.token().getAsStr()
+                #     self.advance(2)
+                #     ret = ARRAYNode(length, contents, self.parse_statement())
+                #     self.advance()
+                #     return ret
             self.advance()
-        return BracketUse(item, value, isSlice)
+            return ARRAYNode(length, contents)
 
     def parse_statement(self, nested=False):
         if self.token().isType(TokenType.IF):
             return self.parse_if(nested)
         if self.token().isType(TokenType.WHILE):
             return self.parse_while()
+        if self.token().isType(TokenType.FOR):
+            return self.parse_for()
         if self.token().isType(TokenType.BREAK) or self.token().isType(TokenType.CONTINUE):
             self.advance()
             return LOOPMODNode(self.token(-1).value)
@@ -652,12 +763,16 @@ class Parser():
             return self.parse_assignment()
         if self.token() and self.token().isType(TokenType.DEF) and self.token(1).isChildOf(TokenType.TYPE_OBJECT):
             return self.parse_function_assignment()
+        if self.token().isType(TokenType.IDENTIFIER) and self.token(1) and self.token(1).isType(TokenType.B_OPEN):
+            return self.parse_bracket()
+        elif self.token().isType(TokenType.B_OPEN) and self.token(-1) and self.token(-1).isType(TokenType.B_CLOSE):
+            return self.parse_bracket()
         endParen = self.token(1) and self.token(1).isType(TokenType.P_OPEN)
         if self.token().isType(TokenType.IDENTIFIER) and endParen:
             return self.parse_function_call()
         isVal = self.token().isChildOf(TokenType.NUMBER) or self.token().isType(TokenType.IDENTIFIER) or self.token().isChildOf(TokenType.BOOL)
         isStart = self.token().isChildOf(TokenType.REGULAR) or self.token().isType(TokenType.P_OPEN) or self.token().isType(TokenType.STRING)
-        if isStart or isVal or self.token().isChildOf(TokenType.B_OPEN):
+        if isVal or isStart or self.token().isChildOf(TokenType.B_OPEN) or self.token().isType(TokenType.ARRAY):
             return self.parse_comparison()
         if self.token().isType(TokenType.PLUS) or self.token().isType(TokenType.MINUS):
             return self.parse_comparison()
@@ -712,6 +827,16 @@ class WHILENode():
         self.code = code
     def __str__(self):
         return f"while {self.conditions} do\n    {self.code}\nend"
+    def __repr__(self):
+        return self.__str__()
+
+class FORNode():
+    def __init__(self, var, parse_item, code):
+        self.var = var
+        self.parse_item = parse_item
+        self.code = code
+    def __str__(self):
+        return f"for {self.var} in {self.parse_item} do\n    {self.code}\nend"
     def __repr__(self):
         return self.__str__()
 
@@ -786,12 +911,14 @@ class FunctionCall():
         return self.__str__()
 
 class BracketUse():
-    def __init__(self, item, args, isSlice=False):
+    def __init__(self, item, args, isSlice=False, extract="", assign=False):
+        self.assign = assign
+        self.extract = extract
         self.item = item
         self.args = args
         self.isSlice = isSlice
     def __str__(self):
-        return f"{self.item}{self.args}"
+        return f"{self.item}{self.args} as {self.extract}"
     def __repr__(self):
         return self.__str__()
 
@@ -833,6 +960,17 @@ class INTNode(EndNode):
         self.value = int(val)
     def __str__(self):
         return f"{self.value}"
+    def __repr__(self):
+        return self.__str__()
+
+class ARRAYNode(EndNode):
+    __module__ = None
+    def __init__(self, size, contents=[]):
+        self.parent = Token(TokenType.ARRAY[0], TokenType.ARRAY[1], "ARRAY")
+        self.size = size
+        self.contents = contents
+    def __str__(self):
+        return f"{self.size}: {self.contents}"
     def __repr__(self):
         return self.__str__()
 
@@ -888,21 +1026,25 @@ class SemanticAnalyzer():
         self.baked_functions = {
             "print": None,
             "println": None,
+            "printarr": None,
+            "printarrln": None,
             "exit": None,
-            "strlen": INTNode,
+            "len": INTNode,
             "intput": INTNode,
             "strint": INTNode,
             "objlen": INTNode,
             "strcon": STRINGNode,
             "input": STRINGNode,
-            "equals": BOOLNode
+            "equals": BOOLNode,
+            "range": None,
+            "itype": INTNode
         }
         plusRules = {
-            INTNode: {INTNode: INTNode, FLOATNode: FLOATNode, BOOLNode: INTNode, UnaryNode: INTNode, STRINGNode: STRINGNode},
-            FLOATNode: {INTNode: FLOATNode, FLOATNode: FLOATNode, BOOLNode: FLOATNode, UnaryNode: FLOATNode},
-            BOOLNode: {INTNode: INTNode, FLOATNode: FLOATNode, BOOLNode: INTNode, UnaryNode: INTNode, STRINGNode: STRINGNode},
+            INTNode: {INTNode: INTNode, FLOATNode: FLOATNode, BOOLNode: INTNode, UnaryNode: INTNode, STRINGNode: INTNode},
+            FLOATNode: {INTNode: FLOATNode, FLOATNode: FLOATNode, BOOLNode: FLOATNode, UnaryNode: FLOATNode, STRINGNode: FLOATNode},
+            BOOLNode: {INTNode: INTNode, FLOATNode: FLOATNode, BOOLNode: INTNode, UnaryNode: INTNode, STRINGNode: INTNode},
             UnaryNode: {INTNode: INTNode, FLOATNode: FLOATNode, BOOLNode: INTNode, UnaryNode: UnaryNode},
-            STRINGNode: {INTNode: STRINGNode, BOOLNode: STRINGNode}
+            STRINGNode: {INTNode: INTNode, BOOLNode: INTNode}
         }
         boolRules = {
             INTNode: {INTNode: BOOLNode, FLOATNode: BOOLNode, BOOLNode: BOOLNode, UnaryNode: BOOLNode, STRINGNode: BOOLNode},
@@ -925,11 +1067,11 @@ class SemanticAnalyzer():
                 UnaryNode: {INTNode: FLOATNode, FLOATNode: FLOATNode, BOOLNode: FLOATNode, UnaryNode: FLOATNode}
             },
             "//": {
-                INTNode: {INTNode: INTNode, FLOATNode: INTNode, BOOLNode: INTNode, UnaryNode: INTNode, STRINGNode: STRINGNode},
-                FLOATNode: {INTNode: INTNode, FLOATNode: INTNode, BOOLNode: INTNode, UnaryNode: INTNode},
-                BOOLNode: {INTNode: INTNode, FLOATNode: INTNode, BOOLNode: INTNode, UnaryNode: INTNode, STRINGNode: STRINGNode},
-                UnaryNode: {INTNode: INTNode, FLOATNode: INTNode, BOOLNode: INTNode, UnaryNode: INTNode, STRINGNode: STRINGNode},
-                STRINGNode: {INTNode: STRINGNode, FLOATNode: STRINGNode, BOOLNode: STRINGNode, STRINGNode: STRINGNode, UnaryNode: STRINGNode}
+                INTNode: {INTNode: INTNode, FLOATNode: INTNode, BOOLNode: INTNode, UnaryNode: INTNode, STRINGNode: INTNode},
+                FLOATNode: {INTNode: INTNode, FLOATNode: INTNode, BOOLNode: INTNode, UnaryNode: INTNode, STRINGNode: FLOATNode},
+                BOOLNode: {INTNode: INTNode, FLOATNode: INTNode, BOOLNode: INTNode, UnaryNode: INTNode, STRINGNode: INTNode},
+                UnaryNode: {INTNode: INTNode, FLOATNode: INTNode, BOOLNode: INTNode, UnaryNode: INTNode, STRINGNode: INTNode}
+
             },
 
             "==": boolRules,
@@ -993,7 +1135,7 @@ class SemanticAnalyzer():
         return True
 
     def isEndNode(self, tree):
-        arg1 = self.isNode(tree) and not self.isUnary(tree) and not type(tree) is FunctionCall and not type(tree) is IFNode
+        arg1 = self.isNode(tree) and not self.isUnary(tree) and not type(tree) is FunctionCall and not type(tree) is IFNode and not type(tree) is FORNode
         return arg1 and not type(tree) is FunctionAssign and not type(tree) is FunctionReturn and not type(tree) is BracketUse
 
     def isUnary(self, tree):
@@ -1007,7 +1149,7 @@ class SemanticAnalyzer():
             output = self.operation_outputs[operation][type1][type2]
             return output
         except:
-            raise TypeError(f"Cannot combine classes: {type1}, {type2}")
+            raise TypeError(f"Cannot combine types: {type1}, {type2}")
 
     def treeAnalyze(self, tree):
         if type(tree) is FunctionAssign:
@@ -1026,14 +1168,28 @@ class SemanticAnalyzer():
         if type(tree) is WHILENode:
             code = SemanticAnalyzer(ProgramNode(tree.code), self.vars).Analyze().branches
             return WHILENode(tree.conditions, code)
+        if type(tree) is FORNode:
+            self.vars |= {str(tree.var): INTNode}
+            code = SemanticAnalyzer(ProgramNode(tree.code), self.vars).Analyze().branches
+            item, itemType = self.treeAnalyze(tree.parse_item)
+            return FORNode(tree.var, item, code), itemType
         if type(tree) is LOOPMODNode:
             return tree, None
+        if type(tree) is ARRAYNode:
+            size, sizeType = self.treeAnalyze(tree.size)
+            if not sizeType is INTNode:
+                raise TypeError("Array size must be int")
+            contents = []
+            for v in tree.contents:
+                cont, _ = self.treeAnalyze(v)
+                contents.append(cont)
+            return ARRAYNode(size, contents), ARRAYNode
         if type(tree) is BracketUse:
             analyze, analyzeType = self.treeAnalyze(tree.item)
-            if tree.isSlice:
-                return BracketUse(analyze, tree.args, True), analyzeType
-            else:
-                return BracketUse(analyze, tree.args, False), analyzeType
+            #if tree.isSlice:
+            return BracketUse(analyze, tree.args, tree.isSlice, tree.extract, tree.assign), analyzeType
+            #else:
+            #    return BracketUse(analyze, tree.args, False, tree.extract, tree.assign), analyzeType
         if type(tree) is AssignmentNode:        # if assignment then analyze right instead and return it
             analyzed, varType = self.treeAnalyze(tree.value)
             self.vars[tree.identifier] = varType
@@ -1122,9 +1278,9 @@ getRoDataLabel = getRoDataLabelGenerator()
 varTypes = {}
 
 class CodeGenerator():
-    def __init__(self, analyzedTokens: ProgramNode, isFunc=False):
+    def __init__(self, analyzedTokens: ProgramNode, isFunc=False, varAmt=0):
         self.tokens = analyzedTokens.branches
-        self.varAmt = 0
+        self.varAmt = varAmt
         self.first = True
         self.isFunc = isFunc
         self.args = []
@@ -1142,17 +1298,19 @@ class CodeGenerator():
 
         self.rodata = []
         self.rodataMap = {}
-        self.data = ["_pgstrt: .quad 0\n_tmpvar: .quad 0\n"]            # GLOBAL VARIABLES ONLY
+        self.data = ["_pgstrt: .quad 0\n_tmpvar: .quad 0\n"] # GLOBAL VARIABLES ONLY
         self.text = []                                                  # holds functions (only used by first created CodeGenerator instance)
         self.main = []                                                  # holds main, also where sub generators store their function data
 
         self.vars = {}                                                  # HOLDS ALL VARIABLE LOCATIONS AS STRINGS
         #["rax", "rcx", "rdx", "rsi", "rdi", "r8", "r9", "r10", "r11"]
 
-    def Generate(self, ret=True, prevVars={}, args=[], objVars: dict[str: Token]={}):
+    def Generate(self, ret=True, prevVars={}, args: list=[], objVars: dict[str: Token]={}):
         self.args = args
         if prevVars or not ret:
             self.vars = prevVars
+            #if "new" in args:
+            #    self.vars |= {prevVars[args.index("new")+1]: args[args.index("new")+2]}
         else:
             self.text = [
                 "_abs:\n",
@@ -1162,7 +1320,6 @@ class CodeGenerator():
                 "  neg rax\n",
                 "  0:\n",
                 "  ret\n",
-                "\n",
                 "_exponent:\n",
                 "  push rsp\n",
                 "  push rbp\n",
@@ -1178,7 +1335,6 @@ class CodeGenerator():
                 "    pop rbp\n",
                 "    pop rsp\n",
                 "    ret\n",
-                "\n",
                 "intstr:\n",
                 "  push rsp\n",
                 "  push rbp\n",
@@ -1571,7 +1727,6 @@ class CodeGenerator():
                 "  mov r15, [rbp-8]\n",
                 "  mov qword ptr [r15], rax\n",
                 "  mov rax, r15\n",
-                "  \n",
                 "  mov r15, [rax]\n",
                 "  sub r15, 1\n",
                 "  lea rdx, [rax+8]\n",
@@ -1653,7 +1808,7 @@ class CodeGenerator():
                 "  pop rbp\n",
                 "  pop rsp\n",
                 "  ret\n",
-                "strlen:\n",
+                "len:\n",
                 "  push rsp\n",
                 "  push rbp\n",
                 "  mov rbp, rsp\n",
@@ -1852,6 +2007,445 @@ class CodeGenerator():
                 "  pop rdx\n",
                 "  pop rbp\n",
                 "  pop rsp\n",
+                "  ret\n",
+                "_decarrcheck:\n",
+                "  push rsp\n",
+                "  push rbp\n",
+                "  mov rbp, rsp\n",
+                "  sub rsp, 8\n",
+                "  mov rax, [rbp+24]\n",
+                "  cmp qword ptr [rax-8], 1\n",
+                "  jne 4f\n",
+                "  lea r15, [rax]\n",
+                "  mov rbx, [rax]\n",
+                "  imul rbx, 16\n",
+                "  sub rbx, 8\n",
+                "  lea rbx, [r15+rbx]\n",
+                "  0:\n",
+                "    cmp rbx, r15\n",
+                "    jle 4f\n",
+                "    cmp qword ptr [rbx+8], 0\n",
+                "    je 3f\n",
+                "    cmp qword ptr [rbx+8], 2\n",
+                "    jne 2f\n",
+                "    push r15\n",
+                "    push rbx\n",
+                "    push rax\n",
+                "    push qword ptr [rbx]\n",
+                "    call _decarrcheck\n",
+                "    add rsp, 8\n",
+                "    pop rax\n",
+                "    pop rbx\n",
+                "    pop r15\n",
+                "    jmp 3f\n",
+                "    2:\n",
+                "    mov qword ptr [rbp-8], r15\n",
+                "    mov r15, [rbx]\n",
+                "    dec qword ptr [r15-8]\n",
+                "    mov r15, [rbp-8]\n",
+                "    3:\n",
+                "    lea rbx, [rbx-16]\n",
+                "    jmp 0b\n",
+                "  4:\n",
+                "  dec qword ptr [rax-8]\n",
+                "  add rsp, 8\n",
+                "  pop rbp\n",
+                "  pop rsp\n",
+                "  ret\n",
+                "_checkarrtype:\n",
+                "  imul r15, 16\n",
+                "  add r15, 8\n",
+                "  lea rax, [rax+r15]\n",
+                "  cmp qword ptr [rax+8], 0\n",
+                "  je 1f\n",
+                "  mov r15, [rax]\n",
+                "  cmp qword ptr [rax+8], 1\n",
+                "  jne 0f\n",
+                "  dec qword ptr [r15-8]\n",
+                "  jmp 1f\n",
+                "  0:\n",
+                "  cmp qword ptr [rax+8], 2\n",
+                "  jne 1f\n",
+                "  push rax\n",
+                "  push qword ptr [rax]\n",
+                "  call _decarrcheck\n",
+                "  add rsp, 8\n",
+                "  pop rax\n",
+                "  1:\n",
+                "  ret\n",
+                "_arrsplit:\n",
+                "  push rsp\n",
+                "  push rbp\n",
+                "  push rdx\n",
+                "  push rcx\n",
+                "  push r8\n",
+                "  mov rbp, rsp\n",
+                "  sub rsp, 8\n",
+                "  jmp 11f\n",
+                "  10:\n",
+                "    mov rax, 0x000000203a727245\n",
+                "    push rax\n",
+                "    mov rax, 1\n",
+                "    mov rdi, 1\n",
+                "    mov rsi, rsp\n",
+                "    mov rdx, 5\n",
+                "    syscall\n",
+                "    mov rax, 0x6563696c53646142\n",
+                "    push rax\n",
+                "    mov rsi, rsp\n",
+                "    mov rax, 1\n",
+                "    mov rdx, 8\n",
+                "    syscall\n",
+                "    add rsp, 16\n",
+                "    push 0\n",
+                "    call exit\n",
+                "  11:\n",
+                "  mov rax, [rbp+56]\n",
+                "  mov rbx, [rbp+72]\n",
+                "  mov rbx, [rbx]\n",
+                "  cmp rax, rbx\n",
+                "  jle 0f\n",
+                "  mov qword ptr [rbp+56], rbx\n",
+                "  0:\n",
+                "  cmp qword ptr [rbp+48], 0\n",
+                "  jl 0f\n",
+                "  cmp qword ptr [rbp+48], 0\n",
+                "  je 10b\n",
+                "  mov rax, [rbp+56]\n",
+                "  sub rax, [rbp+64]\n",
+                "  cmp rax, 0\n",
+                "  jl 10b\n",
+                "  mov rbx, [rbp+48]\n",
+                "  sub rbx, 1\n",
+                "  add rax, rbx\n",
+                "  add rbx, 1\n",
+                "  xor rdx, rdx\n",
+                "  div rbx\n",
+                "  jmp 1f\n",
+                "  0:\n",
+                "  mov rax, [rbp+64]\n",
+                "  sub rax, [rbp+56]\n",
+                "  cmp rax, 0\n",
+                "  jl 10b\n",
+                "  mov rbx, [rbp+48]\n",
+                "  neg rbx\n",
+                "  xor rdx, rdx\n",
+                "  div rbx\n",
+                "  cmp rdx, 0\n",
+                "  je 1f\n",
+                "  inc rax\n",
+                "  1:\n",
+                "  mov rsi, [rbp+72]\n",
+                "  mov rsi, [rsi]\n",
+                "  cmp qword ptr [rbp+64], rsi\n",
+                "  jge 10b\n",
+                "  cmp qword ptr [rbp+64], 0\n",
+                "  jl 10b\n",
+                "  cmp qword ptr [rbp+56], -1\n",
+                "  jl 10b\n",
+                "  imul rax, 16\n",
+                "  add rax, 8\n",
+                "  mov qword ptr [rbp-8], rax\n",
+                "  push rax\n",
+                "  call heapalloc\n",
+                "  add rsp, 8\n",
+                "  mov rbx, [rbp-8]\n",
+                "  mov rsi, [rbp+72]\n",
+                "  xor rdx, rdx\n",
+                "  add rdx, [rbp+64]\n",
+                "  mov rdi, 8\n",
+                "  cmp qword ptr [rbp+48], 0\n",
+                "  jg 4f\n",
+                "  0:\n",
+                "    cmp rdx, 0\n",
+                "    jl 1f\n",
+                "    cmp rdi, rbx\n",
+                "    jge 1f\n",
+                "    mov r15, rdx\n",
+                "    imul r15, 16\n",
+                "    add r15, 8\n",
+                "    add r15, rsi\n",
+                "    mov r8, [r15]\n",
+                "    mov rcx, [r15+8]\n",
+                "    cmp rcx, 0\n",
+                "    je 13f\n",
+                "    inc qword ptr [r8-8]\n",
+                "    13:\n",
+                "    mov qword ptr [rax+rdi], r8\n",
+                "    mov qword ptr [rax+rdi+8], rcx\n",
+                "    add rdi, 16\n",
+                "    add rdx, [rbp+48]\n",
+                "    jmp 0b\n",
+                "  1:\n",
+                "  jmp 1f\n",
+                "  4:\n",
+                "    cmp rdx, [rsi]\n",
+                "    jge 1f\n",
+                "    cmp rdi, rbx\n",
+                "    jge 1f\n",
+                "    mov r15, rdx\n",
+                "    imul r15, 16\n",
+                "    add r15, 8\n",
+                "    add r15, rsi\n",
+                "    mov r8, [r15]\n",
+                "    mov rcx, [r15+8]\n",
+                "    cmp rcx, 0\n",
+                "    je 13f\n",
+                "    inc qword ptr [r8-8]\n",
+                "    13:\n",
+                "    mov qword ptr [rax+rdi], r8\n",
+                "    mov qword ptr [rax+rdi+8], rcx\n",
+                "    add rdi, 16\n",
+                "    add rdx, [rbp+48]\n",
+                "    jmp 4b\n",
+                "  1:\n",
+                "  sub rdi, 8\n",
+                "  shr rdi, 4\n",
+                "  mov qword ptr [rax], rdi\n",
+                "  add rsp, 8\n",
+                "  pop r8\n",
+                "  pop rcx\n",
+                "  pop rdx\n",
+                "  pop rbp\n",
+                "  pop rsp\n",
+                "  ret\n",
+                "itype:\n",
+                "  push rsp\n",
+                "  push rbp\n",
+                "  mov rbp, rsp\n",
+                "  mov rax, [rbp+24]\n",
+                "  imul rax, 16\n",
+                "  add rax, 16\n",
+                "  mov r15, [rbp+32]\n",
+                "  mov rax, [r15+rax]\n",
+                "  pop rbp\n",
+                "  pop rsp\n",
+                "  ret\n",
+                "printarr:\n",
+                "  push rsp\n",
+                "  push rbp\n",
+                "  mov rbp, rsp\n",
+                "  sub rsp, 24\n",
+                "  mov qword ptr [rbp-8], 0\n",
+                "  mov qword ptr [rbp-16], 0\n",
+                "  mov qword ptr [rbp-24], 0\n",
+                "  mov r15, [rbp+24]\n",
+                "  inc qword ptr [r15-8]\n",
+                "  push [rbp+24]\n",
+                "  call len\n",
+                "  add rsp, 8\n",
+                "  mov qword ptr [rbp-8], rax\n",
+                "  mov r15, 16\n",
+                "  push r15\n",
+                "  call heapalloc\n",
+                "  add rsp, 8\n",
+                "  mov qword ptr [rax], 1\n",
+                "  mov dword ptr [rax+8], 0x0000005b\n",
+                "  push rax\n",
+                "  push 1\n",
+                "  call print\n",
+                "  mov r15, [rsp+8]\n",
+                "  sub qword ptr [r15-8], 1\n",
+                "  add rsp, 16\n",
+                "  sub rsp, 24\n",
+                "  mov qword ptr [rsp+16], 0\n",
+                "  mov qword ptr [rsp+8], 10\n",
+                "  mov qword ptr [rsp], 1\n",
+                "  mov rax, [rbp-8]\n",
+                "  mov qword ptr [rsp+16], 0\n",
+                "  mov qword ptr [rsp+8], rax\n",
+                "  mov qword ptr [rsp], 1\n",
+                "  xor rax, rax\n",
+                "  mov [rbp-24], rax\n",
+                "  2:\n",
+                "  mov rax, [rsp+16]\n",
+                "  mov [rbp-24], rax\n",
+                "  cmp qword ptr [rsp], 0\n",
+                "  jl 0f\n",
+                "  cmp rax, [rsp+8]\n",
+                "  jge 3f\n",
+                "  jmp 1f\n",
+                "  0:\n",
+                "  cmp rax, [rsp+8]\n",
+                "  jle 3f\n",
+                "  1:\n",
+                "  push [rbp+24]\n",
+                "  push [rbp-24]\n",
+                "  call itype\n",
+                "  add rsp, 16\n",
+                "  mov qword ptr [rbp-16], rax\n",
+                "  mov rdx, 2\n",
+                "  mov rcx, [rbp-16]\n",
+                "  mov rax, rcx\n",
+                "  cmp rcx, rdx\n",
+                "  jne 0f\n",
+                "  mov rcx, 1\n",
+                "  jmp 1f\n",
+                "  0:\n",
+                "  mov rcx, -1\n",
+                "  1:\n",
+                "  mov rax, rcx\n",
+                "  cmp rax, 1\n",
+                "  jne 4f\n",
+                "  5:\n",
+                "  mov rax, [rbp+24]\n",
+                "  mov r15, [rbp-24]\n",
+                "  imul r15, 16\n",
+                "  add r15, 8\n",
+                "  lea r15, [rax+r15]\n",
+                "  mov rax, [r15]\n",
+                "  push rax\n",
+                "  call printarr\n",
+                "  add rsp, 8\n",
+                "  jmp 6f\n",
+                "  4:\n",
+                "  mov rdx, 1\n",
+                "  mov rcx, [rbp-16]\n",
+                "  mov rax, rcx\n",
+                "  cmp rcx, rdx\n",
+                "  jne 0f\n",
+                "  mov rcx, 1\n",
+                "  jmp 1f\n",
+                "  0:\n",
+                "  mov rcx, -1\n",
+                "  1:\n",
+                "  mov rax, rcx\n",
+                "  cmp rax, 1\n",
+                "  jne 7f\n",
+                "  8:\n",
+                "  mov r15, 16\n",
+                "  push r15\n",
+                "  call heapalloc\n",
+                "  add rsp, 8\n",
+                "  mov qword ptr [rax], 1\n",
+                "  mov dword ptr [rax+8], 0x00000027\n",
+                "  push rax\n",
+                "  push 1\n",
+                "  call print\n",
+                "  mov r15, [rsp+8]\n",
+                "  sub qword ptr [r15-8], 1\n",
+                "  add rsp, 16\n",
+                "  mov rax, [rbp+24]\n",
+                "  mov r15, [rbp-24]\n",
+                "  imul r15, 16\n",
+                "  add r15, 8\n",
+                "  lea r15, [rax+r15]\n",
+                "  mov rax, [r15]\n",
+                "  push rax\n",
+                "  push 1\n",
+                "  call print\n",
+                "  add rsp, 16\n",
+                "  mov r15, 16\n",
+                "  push r15\n",
+                "  call heapalloc\n",
+                "  add rsp, 8\n",
+                "  mov qword ptr [rax], 1\n",
+                "  mov dword ptr [rax+8], 0x00000027\n",
+                "  push rax\n",
+                "  push 1\n",
+                "  call print\n",
+                "  mov r15, [rsp+8]\n",
+                "  sub qword ptr [r15-8], 1\n",
+                "  add rsp, 16\n",
+                "  jmp 9f\n",
+                "  7:\n",
+                "  mov rax, [rbp+24]\n",
+                "  mov r15, [rbp-24]\n",
+                "  imul r15, 16\n",
+                "  add r15, 8\n",
+                "  lea r15, [rax+r15]\n",
+                "  mov rax, [r15]\n",
+                "  push rax\n",
+                "  call intstr\n",
+                "  add rsp, 8\n",
+                "  push rax\n",
+                "  push 1\n",
+                "  call print\n",
+                "  add rsp, 16\n",
+                "  9:\n",
+                "  6:\n",
+                "  push [rbp-24]\n",
+                "  mov rdx, 1\n",
+                "  mov rcx, [rbp-8]\n",
+                "  sub rcx, rdx\n",
+                "  mov rdx, rcx\n",
+                "  pop rcx\n",
+                "  mov rax, rcx\n",
+                "  cmp rcx, rdx\n",
+                "  jge 0f\n",
+                "  mov rcx, 1\n",
+                "  jmp 1f\n",
+                "  0:\n",
+                "  mov rcx, -1\n",
+                "  1:\n",
+                "  mov rax, rcx\n",
+                "  cmp rax, 1\n",
+                "  jne 10f\n",
+                "  11:\n",
+                "  mov r15, 16\n",
+                "  push r15\n",
+                "  call heapalloc\n",
+                "  add rsp, 8\n",
+                "  mov qword ptr [rax], 2\n",
+                "  mov dword ptr [rax+8], 0x0000202c\n",
+                "  push rax\n",
+                "  push 1\n",
+                "  call print\n",
+                "  mov r15, [rsp+8]\n",
+                "  sub qword ptr [r15-8], 1\n",
+                "  add rsp, 16\n",
+                "  jmp 12f\n",
+                "  10:\n",
+                "  12:\n",
+                "  13:\n",
+                "  mov rax, [rsp]\n",
+                "  add qword ptr [rsp+16], rax\n",
+                "  jmp 2b\n",
+                "  14:\n",
+                "  3:\n",
+                "  add rsp, 24\n",
+                "  mov r15, 16\n",
+                "  push r15\n",
+                "  call heapalloc\n",
+                "  add rsp, 8\n",
+                "  mov qword ptr [rax], 1\n",
+                "  mov dword ptr [rax+8], 0x0000005d\n",
+                "  push rax\n",
+                "  push 1\n",
+                "  call print\n",
+                "  mov r15, [rsp+8]\n",
+                "  sub qword ptr [r15-8], 1\n",
+                "  add rsp, 16\n",
+                "  mov rax, 0\n",
+                "  jmp 99f\n",
+                "  99:\n",
+                "  mov r15, [rbp+24]\n",
+                "  push r15\n",
+                "  call _decarrcheck\n",
+                "  add rsp, 8\n",
+                "  add rsp, 24\n",
+                "  pop rbp\n",
+                "  pop rsp\n",
+                "  ret\n",
+                "printarrln:\n",
+                "  push rsp\n",
+                "  push rbp\n",
+                "  mov rbp, rsp\n",
+                "  mov r15, [rbp+24]\n",
+                "  inc qword ptr [r15-8]\n",
+                "  push [rbp+24]\n",
+                "  call printarr\n",
+                "  add rsp, 8\n",
+                "  push 0\n",
+                "  call println\n",
+                "  add rsp, 8\n",
+                "  mov rax, 0\n",
+                "  mov r15, [rbp+24]\n",
+                "  push r15\n",
+                "  call _decarrcheck\n",
+                "  add rsp, 8\n",
+                "  pop rbp\n",
+                "  pop rsp\n",
                 "  ret\n"
             ]
         total_vars = []
@@ -1880,7 +2474,10 @@ class CodeGenerator():
                     self.addLine(f"mov qword ptr [rbp-{v}], 0")
             for var, varType in objVars.items():
                 if not (varType.isType(TokenType.INT) or varType.isType(TokenType.FLOAT) or varType.isType(TokenType.BOOL)):
-                    varTypes[var] = "object"
+                    if varType.isType(TokenType.ARRAY):
+                        varTypes[var] = "objectarray"
+                    else:
+                        varTypes[var] = "object"
                     self.addLine(f"mov r15, {self.getVarLoc(var)}")
                     self.addLine(f"inc qword ptr [r15-8]")
                 else:
@@ -1896,9 +2493,14 @@ class CodeGenerator():
             #         self.addLine(f"mov r15, {self.getVarLoc(var)}")
             #         self.addLine(f"dec qword ptr [r15-8]")
             for var in self.vars:
-                if var in varTypes and varTypes[var] == "object":
+                if var in varTypes and "object" in varTypes[var]: # == "object":
                     self.addLine(f"mov r15, {self.getVarLoc(var)}")
-                    self.addLine("dec qword ptr [r15-8]")
+                    if "array" in varTypes[var]:
+                        self.addLine("push r15")
+                        self.addLine("call _decarrcheck")
+                        self.addLine("add rsp, 8")
+                    else:
+                        self.addLine("dec qword ptr [r15-8]")
             if not (ret and not prevVars and not args and not objVars and not self.isFunc):
                 self.addLine(f"add rsp, {local_var_count*8}")
             self.addLine("pop rbp")
@@ -1916,9 +2518,13 @@ class CodeGenerator():
             self.addFunc(func)
         if not ret:
             #self.addLine("ret")
-            return self.text + self.main, self.rodata
+            if not "data" in args:
+                return self.text + self.main, self.rodata
+            return self.text + self.main, self.rodata, self.data[1:]
         if "main" in args:
-            return self.main, self.rodata
+            if not "data" in args:
+                return self.main, self.rodata
+            return self.main, self.rodata, self.data[1:]
 
         first_half = [".intel_syntax noprefix\n", ".global _start\n", ".section .rodata\n"] + self.rodata + [".data\n"] + self.data
         second_half = [".text\n"] + self.text + ["_start:\n"] + self.main
@@ -1952,6 +2558,11 @@ class CodeGenerator():
             for v in node.code:
                 count += self.countVars(v, ret, args)
             return count
+        elif type(node) is FORNode:
+            count = 1#self.countVars(node.var, ret, args)
+            for v in node.code:
+                count += self.countVars(v, ret, args)
+            return count
         else:
             return 0
 
@@ -1962,6 +2573,7 @@ class CodeGenerator():
             self.varAmt += 1
             self.vars[var] = f"[rbp-{self.varAmt*8}]"
         else:
+            self.addData(var)
             self.vars[var] = f"[{var}]"
         if regOrVal != 0:
             self.setVarAsm(var, regOrVal)
@@ -2116,12 +2728,24 @@ class CodeGenerator():
     def retIsObj(self, item: EndNode):
         return not ((type(item) is INTNode) or (type(item) is FLOATNode) or (type(item) is BOOLNode))
 
+    def checkVarAppearance(self, item, var: str):       # NEED TO ADD BRACKET CHECKING FOR SINGLE INDEXES
+        if type(item) is ARRAYNode:
+            for cont in item.contents:
+                if self.checkVarAppearance(cont, var):
+                    return True
+            return False
+        elif type(item) is IDENTIFIERNode:
+            return item.value == var
+        else:
+            return False
+        # if type(item) is BracketUse:
+        #     return (self.checkVarAppearance(item.args) or self.checkVarAppearance(item.assign)) and not item.isSlice
+
     def traverse_tree(self, tree, first=False, args: list=[]):
         if type(tree) is FunctionCall:
             undo = []
             for arg in tree.args if not (tree.name.lower() == "print" or tree.name.lower() == "println") else tree.args[::-1]:
                 retType = self.traverse_tree(arg, False, ["print", "nonliteral"] if tree.name.lower() == "print" or tree.name.lower() == "println" else ["nonliteral"])
-                print(retType)
                 undo.append(retType)
             if tree.name.lower() == "print" or tree.name.lower() == "println":
                 self.addLine(f"push {len(tree.args)}")
@@ -2151,7 +2775,6 @@ class CodeGenerator():
                 self.addLine("push rax")
             if tree.name in baked and nat:
                 return "native"
-            print(tree.name, nat)
             return "objectvar" if not nat else "native"
         if type(tree) is OperationNode:
             self.traverse_tree(tree.left)
@@ -2228,6 +2851,72 @@ class CodeGenerator():
             self.addLine(f"{endLabel}:")
             return
 
+        if type(tree) is FORNode:
+            startLabel = next(getWhileStartLabel)
+            endLabel = next(getWhileEndLabel)
+            contLabel = next(getWhileContinueLabel)
+            brkLabel = next(getWhileBreakLabel)
+            self.addVar(tree.var)#
+            varTypes[tree.var] = "native"
+            isRange = type(tree.parse_item) == FunctionCall and tree.parse_item.name == "range"
+            self.addLine("sub rsp, 24")
+            self.addLine("mov qword ptr [rsp+16], 0")
+            self.addLine("mov qword ptr [rsp+8], 10")
+            self.addLine("mov qword ptr [rsp], 1")
+            if isRange:
+                call = tree.parse_item
+                if len(call.args) == 1:
+                    self.traverse_tree(call.args[0])
+                    self.addLine("pop rax")
+                    self.addLine("mov qword ptr [rsp+16], 0")
+                    self.addLine("mov qword ptr [rsp+8], rax")
+                    self.addLine("mov qword ptr [rsp], 1")
+                    self.addLine("xor rax, rax")
+                elif len(call.args) > 1:
+                    self.traverse_tree(call.args[1])
+                    self.addLine("pop rax")
+                    self.addLine("mov qword ptr [rsp+8], rax")
+                    if len(call.args) == 3:
+                        self.traverse_tree(call.args[2])
+                        self.addLine("pop rax")
+                        self.addLine("mov qword ptr [rsp], rax")
+                    else:
+                        self.addLine("mov qword ptr [rsp], 1")
+                    self.traverse_tree(call.args[0])
+                    self.addLine("pop rax")
+                    self.addLine("mov qword ptr [rsp+16], rax")
+                self.setVarAsm(tree.var, "rax")
+            self.addLine(f"{startLabel}:")
+            self.addLine(f"mov rax, [rsp+16]")
+            self.setVarAsm(tree.var, "rax")
+            self.addLine("cmp qword ptr [rsp], 0")
+            self.addLine("jl 0f")
+            self.addLine("cmp rax, [rsp+8]")
+            self.addLine(f"jge {endLabel}")
+            self.addLine("jmp 1f")
+            self.addLine("0:")
+            self.addLine("cmp rax, [rsp+8]")
+            self.addLine(f"jle {endLabel}")
+            self.addLine("1:")
+
+            main = CodeGenerator(ProgramNode(tree.code), self.isFunc, self.varAmt).Generate(False, self.vars, ["main", "data", "continueLabel", contLabel, "breakLabel", brkLabel])
+            readOnly = main[1]
+            data = main[2]
+            main = main[0]
+            self.main += main
+            self.rodata += readOnly
+            self.data += data
+
+            self.addLine(f"{contLabel}:")
+            self.addLine("mov rax, [rsp]")
+            self.addLine("add qword ptr [rsp+16], rax")
+            #self.addLine("push qword ptr [rsp+16]")
+            self.addLine(f"jmp {startLabel}")
+            self.addLine(f"{brkLabel}:")
+            self.addLine(f"{endLabel}:")
+            self.addLine("add rsp, 24")
+            return
+
         if type(tree) is LOOPMODNode:
             if tree.mod.lower() == "continue":
                 self.addLine(f"jmp {args[args.index("continueLabel")+1]}")
@@ -2240,7 +2929,7 @@ class CodeGenerator():
             return
 
         if type(tree) is FunctionReturn:
-            retType = self.traverse_tree(tree.value, False, ["nonliteral"])
+            retType = self.traverse_tree(tree.value, False, ["nonliteral", "dec"])
             self.addLine(f"pop rax")
             self.addLine("jmp 99f")
             return retType
@@ -2254,28 +2943,55 @@ class CodeGenerator():
 
         if type(tree) is AssignmentNode:
             inTmp = False
-            if tree.identifier in self.vars and tree.identifier in varTypes and varTypes[tree.identifier] == "object":
+            inVarsAndTypes = tree.identifier in self.vars and tree.identifier in varTypes
+            varTypeBefore = varTypes[tree.identifier] if inVarsAndTypes else ""
+            if inVarsAndTypes and (varTypes[tree.identifier] == "object" or "array" in varTypes[tree.identifier]):
                 inTmp = True
                 self.addLine(f"mov r15, {self.getVarLoc(tree.identifier)}")
                 self.addLine("mov qword ptr [_tmpvar], r15")
-                #self.addLine(f"mov r15, {self.getVarLoc(tree.identifier)}")
-                #self.addLine("dec qword ptr [r15-8]")
             self.addVar(tree.identifier)
             newType = self.traverse_tree(tree.value, False, ["nonliteral"])
             varTypes[tree.identifier] = newType if not "var" in newType else newType[:-3]
             if first:
                 self.addLine("pop rax")
-            if newType == "objectvar":
+            if "object" in newType and "var" in newType:
                 self.addLine("inc qword ptr [rax-8]")
             self.setVarAsm(tree.identifier, "rax")
             if inTmp:
                 self.addLine("mov r15, [_tmpvar]")
-                self.addLine("dec qword ptr [r15-8]")
+                if "array" in varTypeBefore: #"array" in varTypes[tree.identifier]:
+                    self.addLine("push r15")
+                    self.addLine("call _decarrcheck")
+                    self.addLine("add rsp, 8")
+                else:
+                    self.addLine("dec qword ptr [r15-8]")
             return
 
         if type(tree) is BracketUse:
-            self.traverse_tree(tree.item, False)
-            if tree.isSlice:
+            print(tree.assign, tree.isSlice, tree.item, tree.extract, tree.args)
+            if tree.assign != False:
+                assignType = self.traverse_tree(tree.assign)    # the type that is being assigned
+                varType = self.traverse_tree(tree.item)         # check this for strings later, its the item being indexed to change
+                if not type(tree.args[0]) is str:
+                    self.traverse_tree(tree.args[0])
+                else:
+                    self.addLine(f"push {tree.args[0]}")
+                self.addLine("pop r15")
+                self.addLine("pop rax")
+                self.addLine("call _checkarrtype")
+                self.addLine("pop r15")                     # pops value to assign into r15
+                if assignType == "objectvar":
+                    self.addLine("mov qword ptr [rax+8], 1")
+                elif assignType == "objectarrayvar" or assignType == "objectarray":
+                    self.addLine("mov qword ptr [rax+8], 2")
+                else:
+                    self.addLine("mov qword ptr [rax+8], 0")
+                self.addLine("mov qword ptr [rax], r15")
+                if "var" in assignType and not "native" in assignType:
+                    self.addLine("inc qword ptr [r15-8]")
+                return
+            elif tree.isSlice:
+                varType = self.traverse_tree(tree.item)
                 treeargs = tree.args + ([":"]*(3-len(tree.args)))
                 print(treeargs)
                 for i in range(3):
@@ -2306,24 +3022,47 @@ class CodeGenerator():
                                 self.addLine("push 1")
                             else:
                                 self.addLine(f"push {arg}")
-                self.addLine("call _strsplit")
-                self.addLine("add rsp, 32")
-                self.addLine("push rax")
-                return "object"
-            else:
-                if type(tree.args[0]) is str:
-                    self.addLine(f"push {tree.args[0]}")
-                    self.addLine(f"mov r15, {tree.args[0]}")
+                if not "array" in varType:
+                    self.addLine("call _strsplit")
                 else:
-                    self.traverse_tree(tree.args[0])
-                    self.addLine("mov r15, [rsp]")
-                self.addLine("inc r15")
-                self.addLine("push r15")
-                self.addLine("push 1")
-                self.addLine("call _strsplit")
+                    self.addLine("call _arrsplit")
                 self.addLine("add rsp, 32")
                 self.addLine("push rax")
-                return "object"
+                return varType if not "var" in varType else varType[:-3]
+            else:
+                varType = self.traverse_tree(tree.item)
+                if not "array" in varType:
+                    if type(tree.args[0]) is str:
+                        self.addLine(f"push {tree.args[0]}")
+                        self.addLine(f"mov r15, {tree.args[0]}")
+                    else:
+                        self.traverse_tree(tree.args[0])
+                        self.addLine("mov r15, [rsp]")
+                    self.addLine("inc r15")
+                    self.addLine("push r15")
+                    self.addLine("push 1")
+                    self.addLine("call _strsplit")
+                    self.addLine("add rsp, 32")
+                    self.addLine("push rax")
+                    return "object"
+                else:
+                    self.addLine("pop rax")
+                    if type(tree.args[0]) is str:
+                        self.addLine(f"mov r15, {tree.args[0]}")
+                    else:
+                        self.traverse_tree(tree.args[0])
+                        self.addLine("pop r15")
+                    self.addLine("imul r15, 16")
+                    self.addLine("add r15, 8")
+                    self.addLine("lea r15, [rax+r15]")
+                    self.addLine("mov rax, [r15]")
+                    self.addLine("push rax")
+                    if "print" in args and "native" in tree.extract:
+                        self.addLine("call intstr")
+                        self.addLine("add rsp, 8")
+                        self.addLine("push rax")
+                        tree.extract = "object"
+                    return tree.extract + "var"
 
         if self.isNode(tree):
             if type(tree) is INTNode:
@@ -2355,7 +3094,7 @@ class CodeGenerator():
                     self.addLine("push rax")
                 return
             if type(tree) is STRINGNode:
-                if "nonliteral" in args:
+                if True: #"nonliteral" in args:
                     byteAmt = 16
                     value = tree.value
                     size = len(value)+9
@@ -2377,15 +3116,53 @@ class CodeGenerator():
                         if chars == "00000000":
                             continue
                         self.addLine(f"mov dword ptr [rax+{i*4+8}], 0x{chars}")
-                else:
-                    string = ""
-                    for v in tree.value:
-                        string += v
-                    string = bytes.fromhex(string).decode("utf-8")
-                    self.addRoData(string, [f".quad {len(tree.value)}", f".ascii \"{string}\""])
-                    self.addLine(f"lea rax, {self.rodataMap[string]}")
+                # else:
+                #     string = ""
+                #     for v in tree.value:
+                #         string += v
+                #     string = bytes.fromhex(string).decode("utf-8")
+                #     self.addRoData(string, [f".quad {len(tree.value)}", f".ascii \"{string}\""])
+                #     self.addLine(f"lea rax, {self.rodataMap[string]}")
+                if "dec" in args:
+                    self.addLine("dec qword ptr [rax-8]")
                 self.addLine("push rax")
                 return "object"
+            if type(tree) is ARRAYNode:
+                # if "insidearray" in args:
+                #     self.addLine("mov rax, [_tmpvar]")
+                #     self.addLine("inc qword ptr [rax-8], 1")
+                self.traverse_tree(tree.size)
+                self.addLine("pop rax")
+                self.addLine("push rax")
+                self.addLine("imul rax, 16")
+                self.addLine("add rax, 8")
+                self.addLine("push rax")
+                self.addLine("call heapalloc")
+                self.addLine("add rsp, 8")
+                self.addLine("pop r15")
+                self.addLine("mov qword ptr [rax], r15")
+                self.addLine("push rax")
+                for i in range(len(tree.contents)):
+                    v = tree.contents[i]
+                    objType = self.traverse_tree(v)
+                    self.addLine("pop r15")
+                    self.addLine("mov rax, [rsp]")
+                    if "object" in objType and ("var" in objType or "array" in objType):
+                        if "var" in objType:
+                            self.addLine("inc qword ptr [r15-8]")
+                        if "array" in objType:
+                            self.addLine(f"mov qword ptr [rax+{i*16+16}], 2")
+                        elif "object" in objType:
+                            self.addLine(f"mov qword ptr [rax+{i*16+16}], 1")
+                    elif "object" in objType:
+                        self.addLine(f"mov qword ptr [rax+{i*16+16}], 1")
+                    #else:
+                        #self.addLine(f"mov qword ptr [rax+{i*8+16}], 0")
+                    #self.addLine("mov rax, [rsp]")
+                    self.addLine(f"mov qword ptr [rax+{i*16+8}], r15")
+                if "dec" in args:
+                    self.addLine("dec qword ptr [rax-8]")
+                return "objectarray"
 
         raise SyntaxError(f"Forgot to add {tree} here")
 
@@ -2405,7 +3182,7 @@ class Optimizer():
             line = self.source[i]
             if not line:
                 continue
-            elif line == "push rsp" or line == "pop rsp" or line == "push rbp" or line == "pop rbp" or ":" in line:
+            elif line == "push rsp" or line == "pop rsp" or line == "push rbp" or line == "pop rbp" or ":" in line or "call" in line:
                 push1 = ""
                 push1ln = 0
                 push2 = ""
@@ -2432,6 +3209,11 @@ class Optimizer():
                     self.source[push1ln] = ""
                     self.source[i] = f"mov {line[4:-1]}, {push1}\n"
                     push1 = ""
+            else:
+                push1 = ""
+                push1ln = 0
+                push2 = ""
+                push2ln = 0
 
         mov = ""
         movln = 0
@@ -2440,6 +3222,9 @@ class Optimizer():
             line = self.source[i]
             if not line:
                 continue
+            elif line[:4] == "push" or line[:3] == "xor":
+                mov = ""
+                movln = 0
             elif line[:3] == "mov":
                 builtreg = line[4:line.index(",")]
                 if not "[" in builtreg:
@@ -2452,15 +3237,20 @@ class Optimizer():
                 elif mov:
                     built = line[line.rindex(",")+2:line.index("\n")]
                     if built == mov[0]:
-                        if "[" in builtreg:
+                        if "[" in builtreg and not "qword ptr" in builtreg:
                             self.source[movln] = f"mov qword ptr {builtreg}, {mov[1]}\n"
                         else:
                             self.source[movln] = f"mov {builtreg}, {mov[1]}\n"
                         self.source[i] = ""
+            else:
+                mov = ""
+                movln = 0
 
-        newList = []
+        newList: list[str] = []
         for v in self.source:
             if not v or v.count("\n") == len(v):
+                continue
+            elif v[:10] == "sub rsp, 0" or v[:10] == "add rsp, 0":
                 continue
             while v.endswith("\n\n"):
                 v = v[:-1]
@@ -2468,12 +3258,27 @@ class Optimizer():
                 if v[4:v.index(",")] == v[v.index(",")+2:-1]:
                     continue
             newList.append(v)
+
+        for i in range(1, len(newList)):
+            v = newList[i]
+            l = newList[i-1]
+            if v[:3] == "mov" and l[:3] == "mov":
+                strt = l.index("[") if " ptr" in l else 4
+                mov1 = l[strt:l.index(",")]
+                mov2 = l[l.index(",")+2:]
+                if f"{mov2}, {mov1}" == v[v.index("[") if " ptr" in v else 4:]:
+                    newList[i] = ""
         return newList
 
 
 
 
 if __name__ == "__main__":
-    out = Compiler("./Input.kog").Compile()
-    with open("./Output.s", "w") as output:
-        output.writelines(out)
+    try:
+        out = Compiler("./Input.kog").Compile()
+        with open("./Output.s", "w") as output:
+            output.writelines(out)
+    except FileNotFoundError:
+        out = Compiler("./Compiler/Input.kog").Compile()
+        with open("./Compiler/Output.s", "w") as output:
+            output.writelines(out)
