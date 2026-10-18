@@ -97,6 +97,8 @@ arr = Array[10] ~creates an array with 10 elements
 filledArr = Array->[1, 2, "hi", 3] ~arrays hold multiple types
 
 y = filledArr[0] as int   ~specifying type being taken out
+
+filledArr[1] = y   ~dont have to specify type when setting an element of an array
 ```
 The type being taken out of an array must be specified along with the index.
 
