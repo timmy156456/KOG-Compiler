@@ -79,6 +79,28 @@ If there's an error while slicing or indexing a string it will print "Err: BadSl
 Strings can be compared with the equal() method, it takes two object inputs, returns true if their direct contents are equal, very useful for comparing strings.
 
 
+## Arrays
+
+Arrays are created with `Array[size]` to create a fixed size, or `Array->[item1, item2, otherItems]` to fill the array upon creation.
+
+You can slice arrays just as you can with strings, but as a shallow copy, not a deep copy.
+
+Arrays also hold multiple datatypes, you can get the datatype at an index of an array with the itype(array, index) function. 0 means native type (int, bool), 1 means object, 2 means array.
+
+You can print an array out with the printarr(array) or printarrln(array) function.
+
+
+Examples:
+```
+arr = Array[10] ~creates an array with 10 elements
+
+filledArr = Array->[1, 2, "hi", 3] ~arrays hold multiple types
+
+y = filledArr[0] as int   ~specifying type being taken out
+```
+The type being taken out of an array must be specified along with the index.
+
+
 # Operators
 Unary operators:
 
@@ -181,6 +203,22 @@ while i < 5
 end
 ```
 
+# For Loops
+```
+for variable in range(start, stop, step) ~or (start stop), or (stop) or just () as default 10
+   body
+end
+```
+For loops also have `continue` and `break` statements.
+
+Example:
+```
+for i in range()
+   print(i)      ~will print all numbers from 0-9 because default is 10
+end
+```
+
+
 # Creating and Using Functions
 ```
 def returnType functionName(parameterType parameterName)
@@ -219,11 +257,17 @@ print(param, param, param) ~takes infinite arguments, no newline character print
 
 println(param, param, param) ~takes infinite arguments, newline character printed after regular arguments
 
+printarr(array) ~takes only one Array param, prints the formatted array
+
+printarrln(array) ~takes only one Array param, same thing as printarr() but adds a newline character after argument
+
+itype(array, index) ~takes an array and array index, returns the type of the item at that index (0 for native, 1 for object, 2 for array)
+
 strint(value) ~turns a string into an integer, errors with code 127 if impossible
 
 intput(bufferSize) ~takes an integer input of size bufferSize, bufferSize 28 is the min that can hold the largest int, but nothing is stopping you from allocating more space for empty zeros
 
-strlen(string) ~returns the length of a string, does NOT calculate length, just returns the string objects length
+len(string) ~returns the length of a string, does NOT calculate length, just returns the string objects length
 ~every string has a built in length property, so it does not have to calculate the length and can just return the property
 
 input(charLen) ~takes charLen bytes/characters of input from terminal
