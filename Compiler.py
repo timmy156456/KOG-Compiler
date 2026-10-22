@@ -1,3 +1,6 @@
+import sys
+import argparse
+
 class Compiler():
     def __init__(self, src):
         self.source_file = src
@@ -6,18 +9,18 @@ class Compiler():
         with open(self.source_file, "r") as src:
             return [line for line in src]
 
-    def Compile(self):
+    def Compile(self, optim):
         lex = Lexer(self.source_file)
         if not lex.lineLen:
             return ".intel_syntax noprefix\n.global _start\n_start:\nmov rax, 60\nxor rdi, rdi\nsyscall\n"
         lex = lex.Tokenize()
-        print(f"///{lex}///")
+        #print(f"///{lex}///")
         parser = Parser(lex).Parse()
-        print(f"///{parser}///")
+        #print(f"///{parser}///")
         semantic = SemanticAnalyzer(parser).Analyze()
-        print(f"///{semantic}///")
+        #print(f"///{semantic}///")
         generator = CodeGenerator(semantic).Generate() + ["push 0\ncall exit\n"]
-        return Optimizer(generator).Optimize()
+        return Optimizer(generator).Optimize() if optim else generator
 
 
 class Lexer():
@@ -260,7 +263,7 @@ class Lexer():
                 token = self.read_generic(TokenType.IDENTIFIER, "$isidentifier")
                 if token.isType(TokenType.ELSE):
                     self.tokens.append(token)
-                    self.tokens.append(Token(TokenType.EOL[0], TokenType.EOL[1], "EOL"))
+                    self.tokens.append(Token(TokenType.EOL[0], TokenType.EOL[1], "EOL", self.x, self.y))
                     #self.advance()
                     continue
             elif glanced.isdigit():
@@ -275,18 +278,22 @@ class Lexer():
                 raise SyntaxError('Out of place symbol: "."')
             
             if token:
+                token.x = self.x
+                token.y = self.y
                 self.tokens.append(token)
             if self.isEOL() and not self.isEOF() and not self.tokens[-2].isType(TokenType.EOL):
-                self.tokens.append(Token(TokenType.EOL[0], TokenType.EOL[1], "EOL"))
+                self.tokens.append(Token(TokenType.EOL[0], TokenType.EOL[1], "EOL", self.x, self.y))
         return self.tokens
 
 
 
 class Token():
-    def __init__(self, category, type, value=None):
+    def __init__(self, category, type, value=None, x=None, y=None):
         self.category = category
         self.type = type
         self.value = value
+        self.x = x
+        self.y = y
 
     def isChildOf(self, type: TokenType):
         parent = getattr(TokenType, self.type, None)
@@ -330,7 +337,7 @@ class Token():
             return "object"
 
     def __str__(self):
-        return f"Token:[{self.category}, {self.type}, {self.value}]\n"
+        return f"Token:[{self.category}, {self.type}, {self.value}] at ({self.x}, {self.y})\n"
     def __repr__(self):
         return self.__str__()
 
@@ -412,7 +419,7 @@ class TokenType():
 
     WHILE = [TokenCategory.STATEMENT, "WHILE", STATEMENT]
     CONTINUE = [TokenCategory.STATEMENT, "CONTINUE", STATEMENT]
-    BREAK = [TokenCategory.STATEMENT, "CONTINUE", STATEMENT]
+    BREAK = [TokenCategory.STATEMENT, "BREAK", STATEMENT]
 
     FOR = [TokenCategory.STATEMENT, "FOR", STATEMENT]
     # EXEC = [TokenCategory.STATEMENT, "EXEC", STATEMENT]
@@ -423,8 +430,12 @@ class TokenType():
 
     AS = [TokenCategory.STATEMENT, "AS", STATEMENT]
     IN = [TokenCategory.STATEMENT, "IN", STATEMENT]
+
+    NEW = [TokenCategory.STATEMENT, "NEW", STATEMENT]
+    GLOBAL = [TokenCategory.STATEMENT, "GLOBAL", STATEMENT]
+    OUTER = [TokenCategory.STATEMENT, "OUTER", STATEMENT]
     parse_for = {
-        "def": "DEF", "RETURN": "RETURN",
+        "def": "DEF", "RETURN": "RETURN", "new": "NEW", "global": "GLOBAL", "outer": "OUTER",
         "int": "INT", "float": "FLOAT", "bool": "BOOL", "string": "STRING", "NONE": "NONE", "Str": "STRING",
 
         "if": "IF", "end": "END", "AND": "AND", "OR": "OR", "else": "ELSE",
@@ -451,6 +462,7 @@ class Parser():
 
     def parse_value(self, skip=False):
         identStr = self.token().isType(TokenType.IDENTIFIER) or self.token().isType(TokenType.STRING)
+        #t = self.token()
         if self.token().isType(TokenType.INT):
             self.advance()
             return INTNode(self.token(-1).value)
@@ -480,8 +492,12 @@ class Parser():
         elif self.token().isType(TokenType.IDENTIFIER) and self.token(1) and self.token(1).isType(TokenType.P_OPEN):
             return self.parse_function_call()
         elif self.token().isType(TokenType.IDENTIFIER):
+            # if self.token(-1) and (self.token(-1).isType(TokenType.NEW) or self.token(-1).isType(TokenType.GLOBAL) or self.token(-1).isType(TokenType.OUTER)):
+            #     extra = self.token(-1).value
+            # else:
+            #     extra = ""
             self.advance()
-            return IDENTIFIERNode(self.token(-1).value)
+            return IDENTIFIERNode(self.token(-1).value)#, extra)
         elif self.token().isChildOf(TokenType.BOOL):
             self.advance()
             return BOOLNode(self.token(-1).value)
@@ -549,9 +565,13 @@ class Parser():
 
     def parse_assignment(self):
         identifier = self.token().value
+        if self.token(-1) and (self.token(-1).isType(TokenType.NEW) or self.token(-1).isType(TokenType.GLOBAL) or self.token(-1).isType(TokenType.OUTER)):
+            extra = self.token(-1).value
+        else:
+            extra = ""
         while not self.token(-1).isChildOf(TokenType.SETTER):
             self.advance()
-        return AssignmentNode(identifier, self.parse_comparison())
+        return AssignmentNode(identifier, self.parse_comparison(), extra)
 
     def parse_function_call(self):
         args = []
@@ -694,16 +714,12 @@ class Parser():
             if self.token() and self.token().isType(TokenType.B_CLOSE):
                 self.advance()
             extract = ""
-            #if item.value in self.arrays:
-            #    print("awdkmnaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-            #    isSlice = True
             if not isSlice and self.token().isType(TokenType.AS):
                 self.advance()
                 value[-1] = firstItem
                 extract = self.token().getAsStr()
                 self.advance()
             elif not isSlice and self.token().isType(TokenType.EQUALS):
-                #extract = self.token().getAsStr()
                 self.advance()
                 ret = BracketUse(item if not parent else parent, value, isSlice, "", self.parse_statement())
                 return ret
@@ -734,7 +750,7 @@ class Parser():
             else:
                 self.advance()
                 if not self.token().isType(TokenType.B_CLOSE):
-                    length = self.parse_statement()
+                    length = self.parse_comparison()
                 else:
                     length = INTNode(10)
                 #self.advance()
@@ -746,9 +762,12 @@ class Parser():
                 #     self.advance()
                 #     return ret
             self.advance()
+            t = self.token()
             return ARRAYNode(length, contents)
 
     def parse_statement(self, nested=False):
+        if self.token().isType(TokenType.NEW) or self.token().isType(TokenType.GLOBAL) or self.token().isType(TokenType.OUTER):
+            self.advance()
         if self.token().isType(TokenType.IF):
             return self.parse_if(nested)
         if self.token().isType(TokenType.WHILE):
@@ -850,9 +869,10 @@ class LOOPMODNode():
 
 # node class telling the tree that its assigning a variable a value
 class AssignmentNode():
-    def __init__(self, identifier, value):
+    def __init__(self, identifier, value, extra=""):
         self.identifier = identifier
         self.value = value
+        self.extra = extra
     def __str__(self):
         return f"|Assign {self.identifier}, {self.value}|"
     def __repr__(self):
@@ -938,7 +958,6 @@ class EndNode():
     def __init__(self):
         self.parent = None
         self.value = None
-        self.op = None
     def isChildOf(self, type):
         return self.parent.isChildOf(type)
     def isType(self, type):
@@ -1011,7 +1030,6 @@ class IDENTIFIERNode(EndNode):
     def __init__(self, val):
         self.parent = Token(TokenType.IDENTIFIER[0], TokenType.IDENTIFIER[1], val)
         self.value = val
-        self.op = None
     def __str__(self):
         return f"{self.value}"
     def __repr__(self):
@@ -1211,7 +1229,7 @@ class SemanticAnalyzer():
             right, rightType = self.treeAnalyze(tree.right)
             self.checkIsValid(leftType, tree.operation, rightType)
             isOperation = (type(left) is OperationNode) or (type(right) is OperationNode) or (type(left) is UnaryNode) or (type(right) is UnaryNode)
-            if not isOperation and left.isChildOf(TokenType.CONSTANT) and right.isChildOf(TokenType.CONSTANT):
+            if self.isEndNode(left) and self.isEndNode(right) and not isOperation and left.isChildOf(TokenType.CONSTANT) and right.isChildOf(TokenType.CONSTANT):
                 val = self.computeValue(left, tree.operation, right)
                 return val, type(val)
             else:
@@ -1276,6 +1294,7 @@ def getRoDataLabelGenerator():
 getRoDataLabel = getRoDataLabelGenerator()
 
 varTypes = {}
+restoreVars = [{}, []]
 
 class CodeGenerator():
     def __init__(self, analyzedTokens: ProgramNode, isFunc=False, varAmt=0):
@@ -1298,7 +1317,7 @@ class CodeGenerator():
 
         self.rodata = []
         self.rodataMap = {}
-        self.data = ["_pgstrt: .quad 0\n_tmpvar: .quad 0\n"] # GLOBAL VARIABLES ONLY
+        self.data = ["_pgstrt: .quad 0\n"]#_tmpvar: .quad 0\n"] # GLOBAL VARIABLES ONLY
         self.text = []                                                  # holds functions (only used by first created CodeGenerator instance)
         self.main = []                                                  # holds main, also where sub generators store their function data
 
@@ -2566,7 +2585,7 @@ class CodeGenerator():
         else:
             return 0
 
-    def addVar(self, var, regOrVal=0):
+    def addVar(self, var, regOrVal=0, extra=""):
         if not (self.vars.get(var, None) is None):
             return
         if self.isFunc:
@@ -2707,9 +2726,9 @@ class CodeGenerator():
             elif valOrReg2 == "rdx":
                 self.addLine("mov r8, rdx")
                 valOrReg2 = "r8"
-            self.addLine("xor rdx, rdx")
             self.addLine(f"mov rax, {valOrReg1}")
             self.addLine(f"mov rcx, {valOrReg2}")
+            self.addLine("xor rdx, rdx")
             self.addLine("div rcx")
             self.addLine("mov rcx, rdx")
         else:
@@ -2759,12 +2778,16 @@ class CodeGenerator():
                 var = undo[i]
                 if var == "object":
                     self.addLine(f"mov r15, [rsp+{(len(undo)-1-i)*8}]")
-                    self.addLine(f"sub qword ptr [r15-8], 1")
+                    self.addLine("sub qword ptr [r15-8], 1")
+                elif var == "objectarray":
+                    self.addLine(f"mov r15, [rsp+{(len(undo)-1-i)*8}]")
+                    self.addLine("push r15")
+                    self.addLine("call _decarrcheck")
+                    self.addLine("add rsp, 8")
             self.addLine(f"add rsp, {len(tree.args)*8 + (8 if tree.name.lower() == "print" or tree.name.lower() == "println" else 0)}")
             if not first:
                 self.addLine("push rax")
             baked = SemanticAnalyzer(ProgramNode([])).baked_functions
-            #obj = self.retIsObj(tree.retType) and not tree.name in baked
             try:
                 nat = (baked[tree.name] is INTNode) or (baked[tree.name] is FLOATNode) or (baked[tree.name] is BOOLNode)
             except:
@@ -2872,7 +2895,7 @@ class CodeGenerator():
                     self.addLine("mov qword ptr [rsp+8], rax")
                     self.addLine("mov qword ptr [rsp], 1")
                     self.addLine("xor rax, rax")
-                elif len(call.args) > 1:
+                elif len(call.args) == 2:
                     self.traverse_tree(call.args[1])
                     self.addLine("pop rax")
                     self.addLine("mov qword ptr [rsp+8], rax")
@@ -2899,7 +2922,7 @@ class CodeGenerator():
             self.addLine(f"jle {endLabel}")
             self.addLine("1:")
 
-            main = CodeGenerator(ProgramNode(tree.code), self.isFunc, self.varAmt).Generate(False, self.vars, ["main", "data", "continueLabel", contLabel, "breakLabel", brkLabel])
+            main = CodeGenerator(ProgramNode(tree.code), self.isFunc, self.varAmt).Generate(False, self.vars, ["main", "data", "continueLabel", contLabel, "breakLabel", brkLabel, "forloop"])
             readOnly = main[1]
             data = main[2]
             main = main[0]
@@ -2931,6 +2954,8 @@ class CodeGenerator():
         if type(tree) is FunctionReturn:
             retType = self.traverse_tree(tree.value, False, ["nonliteral", "dec"])
             self.addLine(f"pop rax")
+            if "forloop" in args:
+                self.addLine("add rsp, 24")
             self.addLine("jmp 99f")
             return retType
         
@@ -2948,9 +2973,21 @@ class CodeGenerator():
             if inVarsAndTypes and (varTypes[tree.identifier] == "object" or "array" in varTypes[tree.identifier]):
                 inTmp = True
                 self.addLine(f"mov r15, {self.getVarLoc(tree.identifier)}")
-                self.addLine("mov qword ptr [_tmpvar], r15")
+                self.addLine("push r15")
+                #self.addLine("mov qword ptr [_tmpvar], r15")
             self.addVar(tree.identifier)
             newType = self.traverse_tree(tree.value, False, ["nonliteral"])
+            # if tree.extra == "new":
+            #     if tree.identifier in varTypes:
+            #         current = restoreVars
+            #         while tree.identifier in current[0]:
+            #             current = current[1]
+            #             if len(current) <= 1:
+            #                 current.append({})
+            #                 current.append([])
+            #         current[0][tree.identifier] = varTypes[tree.identifier]
+            #     inTmp = False
+            #     varTypeBefore = ""
             varTypes[tree.identifier] = newType if not "var" in newType else newType[:-3]
             if first:
                 self.addLine("pop rax")
@@ -2958,7 +2995,8 @@ class CodeGenerator():
                 self.addLine("inc qword ptr [rax-8]")
             self.setVarAsm(tree.identifier, "rax")
             if inTmp:
-                self.addLine("mov r15, [_tmpvar]")
+                self.addLine("pop r15")
+                #self.addLine("mov r15, [rsp]")
                 if "array" in varTypeBefore: #"array" in varTypes[tree.identifier]:
                     self.addLine("push r15")
                     self.addLine("call _decarrcheck")
@@ -2968,7 +3006,6 @@ class CodeGenerator():
             return
 
         if type(tree) is BracketUse:
-            print(tree.assign, tree.isSlice, tree.item, tree.extract, tree.args)
             if tree.assign != False:
                 assignType = self.traverse_tree(tree.assign)    # the type that is being assigned
                 varType = self.traverse_tree(tree.item)         # check this for strings later, its the item being indexed to change
@@ -2993,7 +3030,6 @@ class CodeGenerator():
             elif tree.isSlice:
                 varType = self.traverse_tree(tree.item)
                 treeargs = tree.args + ([":"]*(3-len(tree.args)))
-                print(treeargs)
                 for i in range(3):
                     arg = treeargs[i]
                     if type(arg) != str:
@@ -3176,11 +3212,11 @@ class Optimizer():
         push2 = ""
         push1ln = 0
         push2ln = 0
-        start = self.source.index("_strsplit:\n")
-        for i in range(len(self.source)-start):
-            i += start
+        start = len(CodeGenerator(ProgramNode([])).Generate())
+        for i in range(start, len(self.source)):
+            # i += start
             line = self.source[i]
-            if not line:
+            if not line or line[:1] == " ":
                 continue
             elif line == "push rsp" or line == "pop rsp" or line == "push rbp" or line == "pop rbp" or ":" in line or "call" in line:
                 push1 = ""
@@ -3188,7 +3224,7 @@ class Optimizer():
                 push2 = ""
                 push2ln = 0
                 continue
-            elif line[:4] == "push":
+            if line[:4] == "push":
                 if not push1:
                     push1 = line[5:]
                     push1ln = i
@@ -3215,39 +3251,57 @@ class Optimizer():
                 push2 = ""
                 push2ln = 0
 
-        mov = ""
-        movln = 0
-        for i in range(len(self.source)-start):
-            i += start
+        invalidateRegs = {
+            "eax": "rax", "ax": "rax", "al": "rax", "ah": "rax",
+            "ebx": "rbx", "bx": "rbx", "bl": "rbx", "bh": "rbx",
+            "ecx": "rcx", "cx": "rcx", "cl": "rcx", "ch": "rcx",
+            "edx": "rdx", "dx": "rdx", "dl": "rdx", "dh": "rdx",
+            "esi": "rsi", "si": "rsi", "sil": "rsi",
+            "edi": "rdi", "di": "rdi", "dil": "rdi",
+            "ebp": "rbp", "bp": "rbp", "bpl": "rbp",
+            "esp": "rsp", "sp": "rsp", "spl": "rsp",
+            "r8d": "r8", "r8w": "r8", "r8b": "r8",
+            "r9d": "r9", "r9w": "r9", "r9b": "r9",
+            "r10d": "r10", "r10w": "r10", "r10b": "r10",
+            "r11d": "r11", "r11w": "r11", "r11b": "r11",
+            "r12d": "r12", "r12w": "r12", "r12b": "r12",
+            "r13d": "r13", "r13w": "r13", "r13b": "r13",
+            "r14d": "r14", "r14w": "r14", "r14b": "r14",
+            "r15d": "r15", "r15w": "r15", "r15b": "r15",
+        }
+        regs = {}
+        for i in range(start, len(self.source)):
+            # i += start
             line = self.source[i]
-            if not line:
+            if not line or line[:1] == " ":
                 continue
             elif line[:4] == "push" or line[:3] == "xor":
-                mov = ""
-                movln = 0
-            elif line[:3] == "mov":
-                builtreg = line[4:line.index(",")]
-                if not "[" in builtreg:
-                    built = line[line.rindex(",")+2:line.index("\n")]
-                    if not "[" in built:
-                        mov = (builtreg, built)
-                        movln = i
-                    else:
-                        mov = ""
-                elif mov:
-                    built = line[line.rindex(",")+2:line.index("\n")]
-                    if built == mov[0]:
+                reg = line[5:].strip("\n") if line[:4] == "push" else line[4:line.index(",")]
+                if reg in regs:
+                    del regs[reg]
+                elif reg in invalidateRegs and invalidateRegs[reg] in regs:
+                    del regs[invalidateRegs[reg]]
+                continue
+            elif line[:3] == "mov":                                             #     reg
+                builtreg = line[4:line.index(",")]                              # mov rax, 10
+                built = line[line.rindex(",")+2:line.index("\n")].strip("\n")   # mov rbx, rax
+                if builtreg in regs:                                            #          built
+                    movln = regs[builtreg][0]
+                    data = regs[builtreg][1]
+                    if built == data[0]:                # if new built is the same as the old register
                         if "[" in builtreg and not "qword ptr" in builtreg:
-                            self.source[movln] = f"mov qword ptr {builtreg}, {mov[1]}\n"
+                            self.source[movln] = f"mov qword ptr {builtreg}, {data[1]}\n"
                         else:
-                            self.source[movln] = f"mov {builtreg}, {mov[1]}\n"
-                        self.source[i] = ""
-            else:
-                mov = ""
-                movln = 0
+                            self.source[movln] = f"mov {builtreg}, {data[1]}\n"
+                if not "[" in built:
+                    regs[builtreg] = (i, (builtreg, built))
+                elif builtreg in regs:
+                    del regs[builtreg]
 
-        newList: list[str] = []
-        for v in self.source:
+        newList: list[str] = self.source[:start]
+        for i in range(start, len(self.source)):
+            v = self.source[i]
+            l = newList[-1]
             if not v or v.count("\n") == len(v):
                 continue
             elif v[:10] == "sub rsp, 0" or v[:10] == "add rsp, 0":
@@ -3257,9 +3311,22 @@ class Optimizer():
             if v[:3] == "mov":
                 if v[4:v.index(",")] == v[v.index(",")+2:-1]:
                     continue
+            if v[:3] == "mov" and l[:3] == "mov":
+                first = l[4:l.index(",")]
+                second = v[v.index(",")+2:-1]
+                if first == second:
+                    val = l[l.index(",")+2:-1]
+                    place = v[4:v.index(",")]
+                    if not "[" in val and not "qword ptr" in place:
+                        newList[-1] = ""
+                        if "[" in place:
+                            newList.append(f"mov qword ptr {place}, {val}\n")
+                        else:
+                            newList.append(f"mov {place}, {val}\n")
+                        continue
             newList.append(v)
 
-        for i in range(1, len(newList)):
+        for i in range(start, len(newList)):
             v = newList[i]
             l = newList[i-1]
             if v[:3] == "mov" and l[:3] == "mov":
@@ -3274,11 +3341,16 @@ class Optimizer():
 
 
 if __name__ == "__main__":
-    try:
-        out = Compiler("./Input.kog").Compile()
-        with open("./Output.s", "w") as output:
-            output.writelines(out)
-    except FileNotFoundError:
-        out = Compiler("./Compiler/Input.kog").Compile()
-        with open("./Compiler/Output.s", "w") as output:
-            output.writelines(out)
+    parser = argparse.ArgumentParser(description="KOG compiler")
+    parser.add_argument("source", help="path to the .kog file")
+    parser.add_argument("output", help="path for the .s file")
+    parser.add_argument("--no-optim", action="store_true", help="disable optimizations")
+    args = parser.parse_args()
+
+    optimize = not args.no_optim
+    out = Compiler(args.source).Compile(optimize)
+    with open(args.output, "w") as f:
+        if type(out) is list:
+            f.writelines(out)
+        else:
+            f.write(out)
