@@ -1,27 +1,31 @@
-~just a basic primesInRange function, takes two input numbers from terminal and finds all primes within that range
-
+~ simple program to create a list and fill it with primes from num1 to num2
 
 def bool isPrime(int num)
     if num <= 1
-        return false
+        return False
     end
-    i = num // 2
-    while i > 1
-        if num % i == 0
-            return false
+    for j in range(2, num//2 + 1)
+        if num % j == 0
+            return False
         end
-        i = i - 1
     end
-    return true
+    return True
 
-def none primesInRange(int x, int y)
-    while x < y
-        if isPrime(x)
-            println("Found", x)
+def Array primesInRange(int num1, int num2)
+    if num1 >= num2
+        println("Invalid range", num1, num2)
+        exit(1)
+    end
+    all = Array[(num2-num1)//2]
+    count = 0
+    for i in range(num1, num2)
+        if isPrime(i)
+            all[count] = i
+            count = count + 1
         end
-        x = x + 1
     end
-    println("Finished")
-    return
+    all = all[:count]
+    return all
 
-primesInRange(intput(7), intput(7))
+list = primesInRange(intput(28), intput(28))
+printarrln(list)
