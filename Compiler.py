@@ -1322,6 +1322,7 @@ class CodeGenerator():
         self.main = []                                                  # holds main, also where sub generators store their function data
 
         self.vars = {}                                                  # HOLDS ALL VARIABLE LOCATIONS AS STRINGS
+        self.localVarTypes = {}
         #["rax", "rcx", "rdx", "rsi", "rdi", "r8", "r9", "r10", "r11"]
 
     def Generate(self, ret=True, prevVars={}, args: list=[], objVars: dict[str: Token]={}):
@@ -2535,6 +2536,10 @@ class CodeGenerator():
             func = self.skipped_funcs[0]
             self.skipped_funcs.remove(func)
             self.addFunc(func)
+
+        for var, typ in self.localVarTypes.items():
+            varTypes[var] = typ
+        
         if not ret:
             #self.addLine("ret")
             if not "data" in args:
@@ -2559,7 +2564,7 @@ class CodeGenerator():
                 return 0
             else:
                 if node.identifier not in self.vars:
-                    self.addVar(node.identifier)
+                    self.addVar(node.identifier, 0, node.extra)
                     return 1
                 return 0
         elif type(node) is ProgramNode:
@@ -2591,6 +2596,9 @@ class CodeGenerator():
         if self.isFunc:
             self.varAmt += 1
             self.vars[var] = f"[rbp-{self.varAmt*8}]"
+            if var in varTypes and extra == "new":
+                self.localVarTypes[var] = varTypes[var]
+                varTypes[var] = "native"
         else:
             self.addData(var)
             self.vars[var] = f"[{var}]"
@@ -2879,7 +2887,7 @@ class CodeGenerator():
             endLabel = next(getWhileEndLabel)
             contLabel = next(getWhileContinueLabel)
             brkLabel = next(getWhileBreakLabel)
-            self.addVar(tree.var)#
+            self.addVar(tree.var, 0, "new")#
             varTypes[tree.var] = "native"
             isRange = type(tree.parse_item) == FunctionCall and tree.parse_item.name == "range"
             self.addLine("sub rsp, 24")
@@ -2975,7 +2983,7 @@ class CodeGenerator():
                 self.addLine(f"mov r15, {self.getVarLoc(tree.identifier)}")
                 self.addLine("push r15")
                 #self.addLine("mov qword ptr [_tmpvar], r15")
-            self.addVar(tree.identifier)
+            self.addVar(tree.identifier, tree.extra)
             newType = self.traverse_tree(tree.value, False, ["nonliteral"])
             # if tree.extra == "new":
             #     if tree.identifier in varTypes:
@@ -3354,3 +3362,11 @@ if __name__ == "__main__":
             f.writelines(out)
         else:
             f.write(out)
+    # try:
+    #     out = Compiler("./Input.kog").Compile(True)
+    #     with open("./Input.s", "w") as f:
+    #         f.writelines(out)
+    # except FileNotFoundError:
+    #     out = Compiler("./Compiler/Input.kog").Compile(True)
+    #     with open("./Compiler/Input.s", "w") as f:
+    #         f.writelines(out)
