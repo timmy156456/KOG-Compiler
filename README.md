@@ -60,6 +60,13 @@ finalString = strcon(myString1, myString2)
 
 println(finalString)   ~will print "Hello, World!"
 ```
+Strings can also be formatted, almost exactly like python:
+```
+x = 5
+
+str = f"number is {x}" ~formats to "number is 5"
+```
+
 Strings can be sliced very similarly to python as str[start:stop\:step]
 
 Taking string input and indexing/slicing example:
