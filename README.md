@@ -219,6 +219,20 @@ for i in range()
    print(i)      ~will print all numbers from 0-9 because default is 10
 end
 ```
+For loops can loop through arrays too.
+```
+for variable in array as type
+   body
+end
+```
+Example:
+```
+arr = Array->[1, 3, 5, 7, 9]
+for num in arr as int
+   print(num)
+end
+~this will print "13579" and works with any type
+```
 
 
 # Creating and Using Functions
@@ -279,6 +293,8 @@ string[start:stop:step] ~splits a string starting at start, ending at step, and 
 string[index] ~creates a new string object of size 1 containing the character at that index of the string
 
 strcon(str1, str2) ~returns a new string that is the result of concatenating str1 with str2
+
+refcount(obj) ~returns the number of variables that directly hold a pointer to obj
 
 equal(obj1, obj2) ~compares two objects to each other, returns true if direct contents are equal
 
