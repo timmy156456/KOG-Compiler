@@ -3024,8 +3024,8 @@ class CodeGenerator():
                 self.addLine("dec qword ptr [rax-8]")
                 self.addLine("2:")
             else:
-                self.addLine("mov rax, [rsp+16]")
-                self.addLine("add qword ptr [rsp+32], rax")
+                self.addLine("mov rax, [rsp]")
+                self.addLine("add qword ptr [rsp+16], rax")
             self.addLine(f"jmp {startLabel}")
             self.addLine(f"{brkLabel}:")
             if not isRange:
