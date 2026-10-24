@@ -322,10 +322,8 @@ I do not have floats, or classes in the language yet.
 
 It can read from any regular text file, but I use .kog as the file suffix.
 
-Until I add terminal usage, you must scroll to the very end of the file and replace the file paths with your own file path and destination.
+Run it in terminal with "{python or python3} {path to compiler} {input file} {output file}" and a "--no-optim" option for removing optimizations.
 
-After you have your paths in, just run the file and it will write into a .s (assembly) file.
-
-The assembly file must exist prior to running the script or nothing will be written.
+After you have your paths in, just run the command and it will write into a .s (assembly) file.
 
 You can run the assembly file by running "./file.s" in your terminal, or by using a plugin with VSCode.
