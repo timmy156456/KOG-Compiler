@@ -23,8 +23,9 @@ class Compiler():
 
 
 class Lexer():
-    def __init__(self, src):
+    def __init__(self, src, isFile=True):
         self.source_file = src
+        self.isFile = isFile
         self.gen = self.__iter__()
         self.eol = False
         self.next_line()
@@ -67,9 +68,12 @@ class Lexer():
 
     # iterates over the whole file
     def __iter__(self):
-        with open(self.source_file, "r") as src:
-            for line in src:
-                yield line.strip()
+        if self.isFile:
+            with open(self.source_file, "r") as src:
+                for line in src:
+                    yield line.strip()
+        else:
+            yield self.source_file
 
     # easy access to next line
     def next_line(self):
@@ -83,8 +87,8 @@ class Lexer():
     
 
     # returns current char of line
-    def glance(self):
-        return self.line[self.x] if self.line else ""
+    def glance(self, plus=0):
+        return self.line[self.x+plus] if self.line else ""
 
 
     def advance(self):
@@ -201,20 +205,85 @@ class Lexer():
         result = self.comparators.get(built) or self.operations.get(built)
         return Token(result[0], result[1], built)
 
-    def read_string(self):
-        built = ""
-        glanced = self.glance()
-        start = glanced
-        self.advance()
-        glanced = self.glance()
-        while glanced != start:
-            built += glanced
-            nl = self.advance()
-            if nl:
-                built += "\n"
+    def read_string(self, isFormatted=False):
+        if not isFormatted:
+            built = ""
             glanced = self.glance()
-        self.advance()
-        return Token(TokenType.STRING[0], TokenType.STRING[1], built)
+            start = glanced
+            self.advance()
+            glanced = self.glance()
+            while glanced != start:
+                built += glanced
+                nl = self.advance()
+                if nl:
+                    built += "\n"
+                glanced = self.glance()
+            self.advance()
+            return Token(TokenType.STRING[0], TokenType.STRING[1], built)
+        else:
+            built = ""
+            start = self.glance()
+            self.advance()
+            glanced = self.glance()
+            calls = []
+            while glanced != start:
+                if glanced == "{":
+                    self.advance()
+                    inside = ""
+                    count = 0
+                    while self.glance() != "}" or count > 0:
+                        if self.glance() == "{":
+                            count += 1
+                        elif self.glance() == "}":
+                            count -= 1
+                        inside += self.glance()
+                        nl = self.advance()
+                        if nl:
+                            inside += "\n"
+                    inside = Lexer(inside, False).Tokenize()
+                    calls.append([
+                        Token(TokenType.IDENTIFIER[0], TokenType.IDENTIFIER[1], "strcon"),
+                        Token(TokenType.P_OPEN[0], TokenType.P_OPEN[1], "("),
+                        Token(TokenType.STRING[0], TokenType.STRING[1], built),
+                        Token(TokenType.COMMA[0], TokenType.COMMA[1], ",")
+                    ] + inside + [
+                        Token(TokenType.P_CLOSE[0], TokenType.P_CLOSE[1], ")")
+                    ])
+                    built = ""
+                    glanced = ""
+                built += glanced
+                nl = self.advance()
+                if nl:
+                    built += "\n"
+                glanced = self.glance()
+            
+            if built:
+                calls.append([Token(TokenType.STRING[0], TokenType.STRING[1], built)])
+            while len(calls) > 1:
+                new = []
+                for i in range(0, len(calls)-1, 2):
+                    new.append([
+                        Token(TokenType.IDENTIFIER[0], TokenType.IDENTIFIER[1], "strcon"),
+                        Token(TokenType.P_OPEN[0], TokenType.P_OPEN[1], "(")
+                    ] + calls[i] + [
+                        Token(TokenType.COMMA[0], TokenType.COMMA[1], ",")
+                    ] + calls[i+1] + [
+                        Token(TokenType.P_CLOSE[0], TokenType.P_CLOSE[1], ")")
+                    ])
+                if i+2 == len(calls)-1:
+                    first = new.pop()
+                    new.append([
+                        Token(TokenType.IDENTIFIER[0], TokenType.IDENTIFIER[1], "strcon"),
+                        Token(TokenType.P_OPEN[0], TokenType.P_OPEN[1], "(")
+                    ] + first + [
+                        Token(TokenType.COMMA[0], TokenType.COMMA[1], ",")
+                    ] + calls[i+2] + [
+                        Token(TokenType.P_CLOSE[0], TokenType.P_CLOSE[1], ")")
+                    ])
+                calls = new
+            calls = calls[0]
+            self.tokens += calls
+            self.advance()
 
     def isfloat(self, x):
         try:
@@ -259,8 +328,10 @@ class Lexer():
             if glanced == ",":
                 token = Token(TokenType.COMMA[0], TokenType.COMMA[1], ",")
                 self.advance()
-            elif glanced == '"' or glanced == "'":
-                token = self.read_string()
+            elif (glanced.upper() == "F" and (self.glance(1) == '"' or self.glance(1) == "'")) or (glanced == '"' or glanced == "'"):
+                if glanced.upper() == "F":
+                    self.advance()
+                token = self.read_string(self.glance(-1).upper() == "F")
             elif glanced.isidentifier():
                 token = self.read_generic(TokenType.IDENTIFIER, "$isidentifier")
                 if token.isType(TokenType.ELSE):
@@ -464,6 +535,8 @@ class Parser():
 
     def parse_value(self, skip=False):
         identStr = self.token().isType(TokenType.IDENTIFIER) or self.token().isType(TokenType.STRING)
+        #isFString = self.token().isType(TokenType.IDENTIFIER) and self.token().value == "F" or self.token().value == "f"
+        #isFString = isFString and self.token(1) and self.token(1).isType(TokenType.STRING)
         #t = self.token()
         if self.token().isType(TokenType.INT):
             self.advance()
@@ -472,26 +545,33 @@ class Parser():
             return self.parse_bracket()
         elif self.token().isType(TokenType.STRING):
             self.advance()
-            escapes = {
-                "\\0": "\0",
-                "\\a": "\a",
-                "\\b": "\b",
-                "\\t": "\t",
-                "\\n": "\n",
-                "\\v": "\v",
-                "\\f": "\f",
-                "\\r": "\r",
-                "\\e": "\x1b"
-            }
-            s: str = self.token(-1).value
-            for esc, val in escapes.items():
-                s = s.replace(esc, val)
-
+            s = self.token(-1).value
             value = []
-            for char in s:
-                value.append(hex(ord(char))[2:])
-                if len(value[-1]) == 1:
-                    value[-1] = "0" + value[-1]
+            if type(s) is list:
+                self.advance()
+            else:
+                escapes = {
+                    "\\0": "\0",
+                    "\\a": "\a",
+                    "\\b": "\b",
+                    "\\t": "\t",
+                    "\\n": "\n",
+                    "\\v": "\v",
+                    "\\f": "\f",
+                    "\\r": "\r",
+                    "\\e": "\x1b",
+                    "\\{": "{",
+                    "\\}": "}"
+                }
+                s: str = self.token(-1).value
+                for esc, val in escapes.items():
+                    s = s.replace(esc, val)
+
+                value = []
+                for char in s:
+                    value.append(hex(ord(char))[2:])
+                    if len(value[-1]) == 1:
+                        value[-1] = "0" + value[-1]
             
             return STRINGNode(value)
         elif self.token().isType(TokenType.NONE):
@@ -2800,17 +2880,18 @@ class CodeGenerator():
     def traverse_tree(self, tree, first=False, args: list=[]):
         if type(tree) is FunctionCall:
             undo = []
-            for arg in tree.args if not (tree.name.lower() == "print" or tree.name.lower() == "println") else tree.args[::-1]:
-                retType = self.traverse_tree(arg, False, ["print", "nonliteral"] if tree.name.lower() == "print" or tree.name.lower() == "println" else ["nonliteral"])
+            doToString = tree.name == "print" or tree.name == "println" or tree.name == "strcon"
+            for arg in tree.args if not (tree.name == "print" or tree.name == "println") else tree.args[::-1]:
+                retType = self.traverse_tree(arg, False, ["print", "nonliteral"] if doToString else ["nonliteral"])
                 if retType == "native" and type(arg) is OperationNode:
                     self.addLine("call intstr")
                     self.addLine("add rsp, 8")
                     self.addLine("push rax")
                 undo.append(retType)
-            if tree.name.lower() == "print" or tree.name.lower() == "println":
+            if tree.name == "print" or tree.name == "println":
                 self.addLine(f"push {len(tree.args)}")
                 undo.append("")
-            elif len(tree.args) == 0 and tree.name.lower() == "exit":
+            elif len(tree.args) == 0 and tree.name == "exit":
                 self.addLine("push 0")
                 self.addLine("call exit")
                 return
@@ -2825,7 +2906,7 @@ class CodeGenerator():
                     self.addLine("push r15")
                     self.addLine("call _decarrcheck")
                     self.addLine("add rsp, 8")
-            self.addLine(f"add rsp, {len(tree.args)*8 + (8 if tree.name.lower() == "print" or tree.name.lower() == "println" else 0)}")
+            self.addLine(f"add rsp, {len(tree.args)*8 + (8 if tree.name == "print" or tree.name == "println" else 0)}")
             if not first:
                 self.addLine("push rax")
             baked = SemanticAnalyzer(ProgramNode([])).baked_functions
