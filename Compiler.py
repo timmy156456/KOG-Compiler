@@ -227,11 +227,11 @@ class Lexer():
             glanced = self.glance()
             calls = []
             while glanced != start:
-                if glanced == "{":
+                if glanced == "{" and not (self.glance(-1) and self.glance(-1) == "\\"):
                     self.advance()
                     inside = ""
                     count = 0
-                    while self.glance() != "}" or count > 0:
+                    while self.glance() != "}" and not (self.glance(-1) and self.glance(-1) == "\\") or count > 0:
                         if self.glance() == "{":
                             count += 1
                         elif self.glance() == "}":
