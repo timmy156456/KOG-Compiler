@@ -572,9 +572,9 @@ class Parser():
                     "\\v": "\v",
                     "\\f": "\f",
                     "\\r": "\r",
-                    "\\e": "\x1b",
+                    "\\e": "\x1b[",
                     "\\{": "{",
-                    "\\}": "}"
+                    "\\\\": "\\"
                 }
                 s: str = self.token(-1).value
                 for esc, val in escapes.items():
@@ -910,7 +910,6 @@ class Parser():
                 trees.append(FunctionReturn(self.parse_comparison()))
                 break
             trees.append(self.parse_statement())
-            print(trees[-1])
         if first:
             return ProgramNode(trees)
         return trees
@@ -2622,7 +2621,19 @@ class CodeGenerator():
                 "  mov rax, [rax-8]\n",
                 "  pop rbp\n",
                 "  pop rsp\n",
-                "  ret\n"
+                "  ret\n",
+                "_indexOOB:\n",
+                "  mov rax, 0x0000424F4F207865\n",
+                "  push rax\n",
+                "  mov rax, 0x646E69203A727245\n",
+                "  push rax\n",
+                "  mov rax, 1\n",
+                "  mov rdi, 1\n",
+                "  mov rsi, rsp\n",
+                "  mov rdx, 14\n",
+                "  syscall\n",
+                "  push 1\n",
+                "  call exit\n"
             ]
         total_vars = []
         varIsFunc = {}
@@ -3321,6 +3332,13 @@ class CodeGenerator():
                     else:
                         self.traverse_tree(tree.args[0])
                         self.addLine("pop r15")
+                    self.addLine("cmp r15, [rax]")
+                    self.addLine("jl 0f")
+                    self.addLine("1:")
+                    self.addLine("call _indexOOB")
+                    self.addLine("0:")
+                    self.addLine("cmp r15, 0")
+                    self.addLine("jl 1b")
                     self.addLine("imul r15, 16")
                     self.addLine("add r15, 8")
                     self.addLine("lea r15, [rax+r15]")
@@ -3537,7 +3555,7 @@ class Optimizer():
             if v[:3] == "mov" and l[:3] == "mov":
                 first = l[4:l.index(",")]
                 second = v[v.index(",")+2:-1]
-                if first == second:
+                if first == second and not first[1:].startswith("_var_"):
                     val = l[l.index(",")+2:-1]
                     place = v[4:v.index(",")]
                     if not "[" in val and not "qword ptr" in place:
