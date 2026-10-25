@@ -664,7 +664,7 @@ class Parser():
 
     def parse_assignment(self):
         identifier = self.token().value
-        if self.token(-1) and (self.token(-1).isType(TokenType.NEW) or self.token(-1).isType(TokenType.GLOBAL) or self.token(-1).isType(TokenType.OUTER)):
+        if self.token(-1) and self.token(-1).isType(TokenType.NEW): #or self.token(-1).isType(TokenType.GLOBAL) or self.token(-1).isType(TokenType.OUTER)):
             extra = self.token(-1).value
         else:
             extra = ""
@@ -860,7 +860,7 @@ class Parser():
             return ARRAYNode(length, contents)
 
     def parse_statement(self, nested=False):
-        if self.token().isType(TokenType.NEW) or self.token().isType(TokenType.GLOBAL) or self.token().isType(TokenType.OUTER):
+        if self.token().isType(TokenType.NEW): #or self.token().isType(TokenType.GLOBAL) or self.token().isType(TokenType.OUTER):
             self.advance()
         if self.token().isType(TokenType.IF):
             return self.parse_if(nested)
@@ -1198,7 +1198,7 @@ class SemanticAnalyzer():
             ">": boolRules
         }
 
-    def Analyze(self):
+    def Analyze(self, returnVars=False):
         newTrees = []
         for tree in self.trees:
             analyzed = self.treeAnalyze(tree)
@@ -1206,7 +1206,9 @@ class SemanticAnalyzer():
                 newTrees.append(analyzed[0])
                 continue
             newTrees.append(analyzed)
-        return ProgramNode(newTrees)
+        if not returnVars:
+            return ProgramNode(newTrees)
+        return ProgramNode(newTrees), self.vars
 
 
     def getNewType(self, node1, operator, node2, isType=False):
@@ -1273,6 +1275,7 @@ class SemanticAnalyzer():
                 self.vars[var] = varType.getAsNode()
             code = SemanticAnalyzer(ProgramNode(tree.code), self.vars).Analyze().branches
             return FunctionAssign(tree.name, tree.args, tree.retType, code), tree.retType.getAsNode()
+        
         if type(tree) is FunctionCall:
             ret = self.vars.get(tree.name, self.baked_functions.get(tree.name))
             tree.retType = ret
@@ -1280,19 +1283,37 @@ class SemanticAnalyzer():
                 analyze, analyzeType = self.treeAnalyze(tree.args[i])
                 tree.args[i] = analyze
             return tree, ret
+        
         if type(tree) is IFNode:
-            code = SemanticAnalyzer(ProgramNode(tree.code), self.vars).Analyze().branches
-            return IFNode(tree.conditions, code, tree.codeelse)
+            code, newVars1 = SemanticAnalyzer(ProgramNode(tree.code), self.vars).Analyze(True)
+            code = code.branches
+            codeElse, newVars2 = SemanticAnalyzer(ProgramNode(tree.codeelse), self.vars).Analyze(True)
+            codeElse = codeElse.branches
+            for var, typ in newVars1.items():
+                if var in newVars2:
+                    if not newVars2[var] is typ:
+                        raise TypeError(f"Uncertain variable mismatch types: {typ} and {newVars2[var]} for variable '{var[5:]}'")
+            for var, typ in newVars2.items():
+                if var in newVars1:
+                    if not newVars1[var] is typ:
+                        raise TypeError(f"Uncertain variable mismatch types: {typ} and {newVars2[var]} for variable '{var[5:]}'")
+            newVars = newVars1 | newVars2
+            self.vars |= newVars
+            return IFNode(tree.conditions, code, codeElse)
+        
         if type(tree) is WHILENode:
             code = SemanticAnalyzer(ProgramNode(tree.code), self.vars).Analyze().branches
             return WHILENode(tree.conditions, code)
+        
         if type(tree) is FORNode:
             self.vars |= {str(tree.var): INTNode}
             code = SemanticAnalyzer(ProgramNode(tree.code), self.vars).Analyze().branches
             item, itemType = self.treeAnalyze(tree.parse_item)
             return FORNode(tree.var, item, code, tree.asType), itemType
+        
         if type(tree) is LOOPMODNode:
             return tree, None
+        
         if type(tree) is ARRAYNode:
             size, sizeType = self.treeAnalyze(tree.size)
             if not sizeType is INTNode:
@@ -1302,27 +1323,31 @@ class SemanticAnalyzer():
                 cont, _ = self.treeAnalyze(v)
                 contents.append(cont)
             return ARRAYNode(size, contents), ARRAYNode
+        
         if type(tree) is BracketUse:
             analyze, analyzeType = self.treeAnalyze(tree.item)
             #if tree.isSlice:
             return BracketUse(analyze, tree.args, tree.isSlice, tree.extract, tree.assign), analyzeType
-            #else:
-            #    return BracketUse(analyze, tree.args, False, tree.extract, tree.assign), analyzeType
+        
         if type(tree) is AssignmentNode:        # if assignment then analyze right instead and return it
             analyzed, varType = self.treeAnalyze(tree.value)
             self.vars[tree.identifier] = varType
             return AssignmentNode(tree.identifier, analyzed, tree.extra)
+        
         elif self.isUnary(tree):                    # if unary then make new node of respective type, and negate it
             analyzed, varType = self.treeAnalyze(tree.value)
             if self.isConst(analyzed):
                 computed = self.computeValue(analyzed, tree.operation)
                 return type(analyzed)(computed), type(analyzed)
             return UnaryNode(analyzed, tree.operation), varType
+        
         elif self.isEndNode(tree) and (tree.isChildOf(TokenType.CONSTANT) or tree.isType(TokenType.IDENTIFIER)):    # if int then climb back up the tree
             return tree, type(tree) if not tree.isType(TokenType.IDENTIFIER) else self.getVar(tree.value)
+        
         elif type(tree) is FunctionReturn:
             analyze, analyzeType = self.treeAnalyze(tree.value)
             return FunctionReturn(analyze), analyzeType
+        
 
         if type(tree) is OperationNode:
             left, leftType = self.treeAnalyze(tree.left)
@@ -2023,7 +2048,15 @@ class CodeGenerator():
                 "  mov byte ptr [rax+rdi], 0\n",
                 "  dec qword ptr [rax]\n",
                 "  1:\n",
+                "  push rax\n",
+                "  push 0\n",
+                "  push qword ptr [rax]\n",
+                "  push 1\n",
+                "  call _strsplit\n",
+                "  add rsp, 24\n",
                 "  dec qword ptr [rax-8]\n",
+                "  pop rdx\n",
+                "  dec qword ptr [rdx-8]\n",
                 "  pop rdx\n",
                 "  pop rbp\n",
                 "  pop rsp\n",
