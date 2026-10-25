@@ -3061,6 +3061,7 @@ class CodeGenerator():
             brkLabel = next(getWhileBreakLabel)
             self.addVar(tree.var, 0, "new")
             isRange = type(tree.parse_item) == FunctionCall and tree.parse_item.name == "range"
+            isString = False
             if isRange:
                 varTypes[tree.var] = "native"
                 self.addLine("sub rsp, 24")
@@ -3091,17 +3092,34 @@ class CodeGenerator():
                     self.addLine("mov qword ptr [rsp], 1")
                 self.setVarAsm(tree.var, "rax")
             else:
-                self.addLine("sub rsp, 32")
-                varTypes[tree.var] = tree.asType
+                try:
+                    isString = not "array" in varTypes[tree.parse_item]
+                except KeyError:
+                    isString = not "array" in varTypes[tree.parse_item.value]
+                if not isString:
+                    self.addLine("sub rsp, 32")
+                    varTypes[tree.var] = tree.asType
+                else:
+                    self.addLine("sub rsp, 40")
+                    varTypes[tree.var] = "object"
                 self.traverse_tree(tree.parse_item)
                 self.addLine("pop rax")
+                self.addLine("inc qword ptr [rax-8]")
                 self.addLine("mov qword ptr [rsp+24], rax")
                 self.addLine("mov qword ptr [rsp+16], 0")
                 self.addLine("mov rax, [rax]")
                 self.addLine("mov qword ptr [rsp+8], rax")
                 self.addLine("mov qword ptr [rsp], 1")
+
+                if isString:
+                    self.addLine("push 24")
+                    self.addLine("call heapalloc")
+                    self.addLine("add rsp, 8")
+                    self.addLine("mov qword ptr [rsp+32], rax")
+                    self.addLine("mov qword ptr [rax], 1")
             self.addLine(f"{startLabel}:")
-            self.addLine(f"mov rax, [rsp+16]")
+            if not isString:
+                self.addLine(f"mov rax, [rsp+16]")
             if isRange:
                 self.setVarAsm(tree.var, "rax")
                 self.addLine("cmp qword ptr [rsp], 0")
@@ -3126,20 +3144,33 @@ class CodeGenerator():
                 self.addLine("1:")
 
                 self.addLine("mov r15, [rsp+24]")
-                self.addLine("imul rax, 16")
-                self.addLine("add rax, 8")
-                self.addLine("push qword ptr [r15+rax+8]")  # r15 is type
-                self.addLine("push [r15+rax]")
-                self.addLine("cmp qword ptr [r15+rax+8], 1")
-                self.addLine("jl 0f")
-                self.addLine("pop rax")
-                self.addLine("inc qword ptr [rax-8]")
-                self.addLine("jmp 1f")
-                self.addLine("0:")
-                self.addLine("pop rax")
-                self.addLine("1:")
-                self.addLine("push rax")                    # rax is the item
-                self.setVarAsm(tree.var, "rax")
+                if not isString:
+                    self.addLine("imul rax, 16")
+                    self.addLine("add rax, 8")
+                    self.addLine("push qword ptr [r15+rax+8]")  # r15 is type
+                    self.addLine("push [r15+rax]")
+                    self.addLine("cmp qword ptr [r15+rax+8], 1")
+                    self.addLine("jl 0f")
+                    self.addLine("pop rax")
+                    self.addLine("inc qword ptr [rax-8]")
+                    self.addLine("jmp 1f")
+                    self.addLine("0:")
+                    self.addLine("pop rax")
+                    self.addLine("1:")
+                    self.addLine("push rax")                    # rax is the item
+                    self.setVarAsm(tree.var, "rax")
+                else:   # need to check index bounds
+                    self.addLine("mov rax, [rsp+16]")
+                    self.addLine("cmp rax, [r15]")
+                    self.addLine("jl 0f")
+                    self.addLine("call _indexOOB")
+                    self.addLine("0:")
+                    self.addLine("add rax, 8")
+                    # self.addLine("mov r15, [rsp+24]")
+                    self.addLine("mov r15b, [r15+rax]")
+                    self.addLine("mov rax, [rsp+32]")
+                    self.addLine("mov byte ptr [rax+8], r15b")
+                    self.setVarAsm(tree.var, "rax")
 
             main = CodeGenerator(ProgramNode(tree.code), self.isFunc, self.varAmt).Generate(False, self.vars, ["main", "data", "continueLabel", contLabel, "breakLabel", brkLabel, "forloop"])
             readOnly = main[1]
@@ -3150,7 +3181,7 @@ class CodeGenerator():
             self.data += data
 
             self.addLine(f"{contLabel}:")
-            if not isRange:
+            if not isRange and not isString:
                 self.addLine("mov rax, [rsp+16]")
                 self.addLine("add qword ptr [rsp+32], rax")
                 self.addLine("pop rax")     # rax is the item
@@ -3171,7 +3202,7 @@ class CodeGenerator():
                 self.addLine("add qword ptr [rsp+16], rax")
             self.addLine(f"jmp {startLabel}")
             self.addLine(f"{brkLabel}:")
-            if not isRange:
+            if not isRange and not isString:
                 self.addLine("pop rax")     # rax is the item
                 self.addLine("pop r15")     # r15 is the type
                 self.addLine("cmp r15, 1")
@@ -3188,8 +3219,16 @@ class CodeGenerator():
             self.addLine(f"{endLabel}:")
             if isRange:
                 self.addLine("add rsp, 24")
-            else:
+            elif not isString:
+                self.addLine("mov rax, [rsp+24]")
+                self.addLine("dec qword ptr [rax-8]")
                 self.addLine("add rsp, 32")
+            else:
+                self.addLine("mov rax, [rsp+32]")
+                self.addLine("dec qword ptr [rax-8]")
+                self.addLine("mov rax, [rsp+24]")
+                self.addLine("dec qword ptr [rax-8]")
+                self.addLine("add rsp, 40")
             if not isRange:
                 self.addLine(f"mov qword ptr {self.getVarLoc(tree.var)}, 0")
                 varTypes[tree.var] = "native"
