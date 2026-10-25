@@ -307,8 +307,8 @@ strint(value) ~turns a string into an integer, errors with code 127 if impossibl
 
 intput(bufferSize) ~takes an integer input of size bufferSize, bufferSize 28 is the min that can hold the largest int, but nothing is stopping you from allocating more space for empty zeros
 
-len(string) ~returns the length of a string, does NOT calculate length, just returns the string objects length
-~every string has a built in length property, so it does not have to calculate the length and can just return the property
+len(string) ~returns the length of an object that supports length, does NOT calculate length, just returns the objects length
+~every string and array has a built in length property, so it does not have to calculate the length and can just return the property
 
 input(charLen) ~takes charLen bytes/characters of input from terminal
 
