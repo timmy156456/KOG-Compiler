@@ -143,17 +143,17 @@ x % y ~modulos
 ```
 Boolean operators:
 
-"==" checks if two values are equal
+`==` checks if two values are equal
 
-"!=" OR "!" checks if two values are not equal, both mean the same thing
+`!=` OR `!` checks if two values are not equal, both mean the same thing
 
-"<" checks if left is less than right value
+`<` checks if left is less than right value
 
-">" checks if left is more than right value
+`>` checks if left is more than right value
 
-"<=" or "=<" checks if left is less than or equal to right value
+`<=` or `=<` checks if left is less than or equal to right value
 
-">=" or "=>" checks if left is more than or equal to right value
+`>=` or `=>` checks if left is more than or equal to right value
 
 
 # If Statements
