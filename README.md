@@ -65,6 +65,11 @@ Strings can also be formatted, almost exactly like python:
 x = 5
 
 str = f"number is {x}" ~formats to "number is 5"
+
+~multi line string:
+y = "line 1
+line 2
+line 3"
 ```
 
 Strings can be sliced very similarly to python as str[start:stop\:step]
