@@ -253,7 +253,7 @@ end
 ~you can also parse strings:
 str = "Hello, World!"
 for char in str
-   print(char, "")   ~"H e l l o ,   W o r l d !"
+   print(char, "")   ~"H e l l o ,   W o r l d ! "
 end
 ```
 Using a for loop to parse through a string only creates one object for the entire loop, if you want to use that character somewhere else without it being overwritten you need to create a copy of it which can be easily done with string slicing (str\[:]) which automatically copies the entire string into a new object.
