@@ -856,12 +856,10 @@ class Parser():
                     length = self.parse_comparison()
                 else:
                     length = INTNode(10)
-            t = self.token()
             self.advance()
             return ARRAYNode(length, contents)
 
     def parse_statement(self, nested=False):
-        t = self.token()
         if self.token().isType(TokenType.NEW) or self.token().isType(TokenType.GLOBAL) or self.token().isType(TokenType.OUTER):
             self.advance()
         if self.token().isType(TokenType.IF):
@@ -912,7 +910,6 @@ class Parser():
                 trees.append(FunctionReturn(self.parse_comparison()))
                 break
             trees.append(self.parse_statement())
-            t = self.token()
             print(trees[-1])
         if first:
             return ProgramNode(trees)
