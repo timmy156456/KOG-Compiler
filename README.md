@@ -151,9 +151,9 @@ Boolean operators:
 
 ">" checks if left is more than right value
 
-"<=" checks if left is less than or equal to right value
+"<=" or "=<" checks if left is less than or equal to right value
 
-">=" checks if left is more than or equal to right value
+">=" or "=>" checks if left is more than or equal to right value
 
 
 # If Statements
