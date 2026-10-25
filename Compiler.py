@@ -212,7 +212,10 @@ class Lexer():
             start = glanced
             self.advance()
             glanced = self.glance()
+            y = self.y
             while glanced != start:
+                if self.isEOF():
+                    raise SyntaxError(f"Unfinished string at ({self.x}, {y})")
                 built += glanced
                 nl = self.advance()
                 if nl:
@@ -226,12 +229,17 @@ class Lexer():
             self.advance()
             glanced = self.glance()
             calls = []
+            y = self.y
             while glanced != start:
+                if self.isEOF():
+                    raise SyntaxError(f"Unfinished string at ({self.x}, {y})")
                 if glanced == "{" and not (self.glance(-1) and self.glance(-1) == "\\"):
                     self.advance()
                     inside = ""
                     count = 0
                     while self.glance() != "}" and not (self.glance(-1) and self.glance(-1) == "\\") or count > 0:
+                        if self.isEOF():
+                            raise SyntaxError(f"Unfinished string at ({self.x}, {y})")
                         if self.glance() == "{":
                             count += 1
                         elif self.glance() == "}":
@@ -281,7 +289,10 @@ class Lexer():
                         Token(TokenType.P_CLOSE[0], TokenType.P_CLOSE[1], ")")
                     ])
                 calls = new
-            calls = calls[0]
+            if len(calls) == 1:
+                calls = calls[0]
+            else:
+                calls = [Token(TokenType.STRING[0], TokenType.STRING[1], "")]
             self.tokens += calls
             self.advance()
 
@@ -347,6 +358,8 @@ class Lexer():
                 if self.line:
                     self.skip_whitespace()
                 token = None
+            elif glanced != ".":
+                raise SyntaxError(f'Unknown symbol: "{glanced}"')
             if glanced == ".":
                 raise SyntaxError('Out of place symbol: "."')
             
@@ -505,10 +518,10 @@ class TokenType():
     IN = [TokenCategory.STATEMENT, "IN", STATEMENT]
 
     NEW = [TokenCategory.STATEMENT, "NEW", STATEMENT]
-    GLOBAL = [TokenCategory.STATEMENT, "GLOBAL", STATEMENT]
-    OUTER = [TokenCategory.STATEMENT, "OUTER", STATEMENT]
+    #GLOBAL = [TokenCategory.STATEMENT, "GLOBAL", STATEMENT]
+    #OUTER = [TokenCategory.STATEMENT, "OUTER", STATEMENT]
     parse_for = {
-        "def": "DEF", "RETURN": "RETURN", "new": "NEW", "global": "GLOBAL", "outer": "OUTER",
+        "def": "DEF", "RETURN": "RETURN", "new": "NEW", #"global": "GLOBAL", "outer": "OUTER",
         "int": "INT", "float": "FLOAT", "bool": "BOOL", "string": "STRING", "NONE": "NONE", "Str": "STRING",
 
         "if": "IF", "end": "END", "AND": "AND", "OR": "OR", "else": "ELSE",
@@ -843,10 +856,12 @@ class Parser():
                     length = self.parse_comparison()
                 else:
                     length = INTNode(10)
+            t = self.token()
             self.advance()
             return ARRAYNode(length, contents)
 
     def parse_statement(self, nested=False):
+        t = self.token()
         if self.token().isType(TokenType.NEW) or self.token().isType(TokenType.GLOBAL) or self.token().isType(TokenType.OUTER):
             self.advance()
         if self.token().isType(TokenType.IF):
@@ -897,6 +912,8 @@ class Parser():
                 trees.append(FunctionReturn(self.parse_comparison()))
                 break
             trees.append(self.parse_statement())
+            t = self.token()
+            print(trees[-1])
         if first:
             return ProgramNode(trees)
         return trees
@@ -1297,7 +1314,7 @@ class SemanticAnalyzer():
         if type(tree) is AssignmentNode:        # if assignment then analyze right instead and return it
             analyzed, varType = self.treeAnalyze(tree.value)
             self.vars[tree.identifier] = varType
-            return AssignmentNode(tree.identifier, analyzed)
+            return AssignmentNode(tree.identifier, analyzed, tree.extra)
         elif self.isUnary(tree):                    # if unary then make new node of respective type, and negate it
             analyzed, varType = self.treeAnalyze(tree.value)
             if self.isConst(analyzed):
@@ -3027,6 +3044,10 @@ class CodeGenerator():
                     self.traverse_tree(call.args[0])
                     self.addLine("pop rax")
                     self.addLine("mov qword ptr [rsp+16], rax")
+                else:
+                    self.addLine("mov qword ptr [rsp+16], 0")
+                    self.addLine("mov qword ptr [rsp+8], 10")
+                    self.addLine("mov qword ptr [rsp], 1")
                 self.setVarAsm(tree.var, "rax")
             else:
                 self.addLine("sub rsp, 32")
@@ -3168,7 +3189,7 @@ class CodeGenerator():
                 self.addLine(f"mov r15, {self.getVarLoc(tree.identifier)}")
                 self.addLine("push r15")
                 #self.addLine("mov qword ptr [_tmpvar], r15")
-            self.addVar(tree.identifier, tree.extra)
+            self.addVar(tree.identifier, "new" if not tree.extra else tree.extra)
             newType = self.traverse_tree(tree.value, False, ["nonliteral"])
             varTypes[tree.identifier] = newType if not "var" in newType else newType[:-3]
             if first:
