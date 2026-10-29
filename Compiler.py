@@ -249,6 +249,7 @@ class Lexer():
                         if nl:
                             inside += "\n"
                     inside = Lexer(inside, False).Tokenize()
+                    # if built:
                     calls.append([
                         Token(TokenType.IDENTIFIER[0], TokenType.IDENTIFIER[1], "strcon"),
                         Token(TokenType.P_OPEN[0], TokenType.P_OPEN[1], "("),
@@ -257,6 +258,13 @@ class Lexer():
                     ] + inside + [
                         Token(TokenType.P_CLOSE[0], TokenType.P_CLOSE[1], ")")
                     ])
+                    # else:
+                    #     calls.append([
+                    #         Token(TokenType.IDENTIFIER[0], TokenType.IDENTIFIER[1], "_strsplit"),
+                    #         Token(TokenType.P_OPEN[0], TokenType.P_OPEN[1], "(")
+                    #     ] + inside + [
+                    #         Token(TokenType.P_CLOSE[0], TokenType.P_CLOSE[1], ")")
+                    #     ])
                     built = ""
                     glanced = ""
                 built += glanced
@@ -380,6 +388,7 @@ class Token():
         self.value = value
         self.x = x
         self.y = y
+        self.extras = []
 
     def isChildOf(self, type: TokenType):
         parent = getattr(TokenType, self.type, None)
@@ -1151,7 +1160,8 @@ class SemanticAnalyzer():
             "equals": BOOLNode,
             "range": None,
             "itype": INTNode,
-            "refcount": INTNode
+            "refcount": INTNode,
+            "intstr": STRINGNode
         }
         plusRules = {
             INTNode: {INTNode: INTNode, FLOATNode: FLOATNode, BOOLNode: INTNode, UnaryNode: INTNode, STRINGNode: INTNode},
@@ -1276,7 +1286,7 @@ class SemanticAnalyzer():
             return FunctionAssign(tree.name, tree.args, tree.retType, code), tree.retType.getAsNode()
         
         if type(tree) is FunctionCall:
-            ret = self.vars.get(tree.name, self.baked_functions.get(tree.name))
+            ret = self.vars.get(tree.name, self.baked_functions.get(tree.name)) if tree.name != "_strsplit" else STRINGNode
             tree.retType = ret
             for i in range(len(tree.args)):
                 analyze, analyzeType = self.treeAnalyze(tree.args[i])
@@ -1553,6 +1563,7 @@ class CodeGenerator():
                 "  mov rax, rbx\n",
                 "  mov qword ptr [rax], rsi\n",
                 "  4:\n",
+                "  dec qword ptr [rax-8]\n",
                 "  add rsp, 24\n",
                 "  pop rbp\n",
                 "  pop rsp\n",
@@ -1958,6 +1969,7 @@ class CodeGenerator():
                 "  mov r15, [rbp-16]\n",
                 "  sub rax, r15\n",
                 "  lea rax, [rax-8]\n",
+                "  dec qword ptr [rax-8]\n",
                 "  mov rdi, [rbp+24]\n",
                 "  dec qword ptr [rdi-8]\n",
                 "  mov rbx, [rbp+32]\n",
@@ -2939,16 +2951,41 @@ class CodeGenerator():
         if type(tree) is FunctionCall:
             undo = []
             doToString = tree.name == "print" or tree.name == "println" or tree.name == "strcon"
+            print(tree.name)
+            if tree.name == "strcon":
+                arg0 = type(tree.args[0]) is STRINGNode and not tree.args[0].value
+                arg1 = type(tree.args[1]) is STRINGNode and not tree.args[1].value
+                if arg0 or arg1:
+                    print(arg0, arg1)
+                    if arg0:
+                        self.traverse_tree(tree.args[1], False, ["print", "nonliteral", "copy", "dec"])
+                    elif arg1:
+                        self.traverse_tree(tree.args[0], False, ["print", "nonliteral", "copy", "dec"])
+                    self.addLine("pop rax")
+                    if not "tmp" in args:
+                        self.addLine("inc qword ptr [rax-8]")
+                    self.addLine("push rax")
+                    return "object"
+            #print(tree)
             for arg in tree.args if not (tree.name == "print" or tree.name == "println") else tree.args[::-1]:
-                retType = self.traverse_tree(arg, False, ["print", "nonliteral"] if doToString else ["nonliteral"])
-                if retType == "native" and type(arg) is OperationNode:
+                if tree.name == "strcon" and type(arg) is FunctionCall and arg.name == "strcon":
+                    retType = self.traverse_tree(arg, False, ["print", "nonliteral", "tmp", "dec"] if doToString else ["nonliteral", "tmp", "dec"])
+                elif tree.name == "strcon" and type(arg) is STRINGNode:
+                    retType = self.traverse_tree(arg, False, ["print", "nonliteral", "dec"] if doToString else ["nonliteral", "dec"])
+                else:
+                    retType = self.traverse_tree(arg, False, ["print", "nonliteral"] if doToString else ["nonliteral"])
+                if retType == "native" and type(arg) is OperationNode and doToString:
                     self.addLine("call intstr")
                     self.addLine("add rsp, 8")
+                    self.addLine("inc qword ptr [rax-8]")
                     self.addLine("push rax")
+                    retType = "object"
+                if "object" in retType:
+                    self.addLine("mov r15, [rsp]")
+                    self.addLine("inc qword ptr [r15-8]")
                 undo.append(retType)
             if tree.name == "print" or tree.name == "println":
                 self.addLine(f"push {len(tree.args)}")
-                undo.append("")
             elif len(tree.args) == 0 and tree.name == "exit":
                 self.addLine("push 0")
                 self.addLine("call exit")
@@ -2956,11 +2993,14 @@ class CodeGenerator():
             self.addLine(f"call {tree.name}")
             for i in range(len(undo)):
                 var = undo[i]
-                if var == "object":
-                    self.addLine(f"mov r15, [rsp+{(len(undo)-1-i)*8}]")
-                    self.addLine("sub qword ptr [r15-8], 1")
-                elif var == "objectarray":
-                    self.addLine(f"mov r15, [rsp+{(len(undo)-1-i)*8}]")
+                if "object" in var and not "array" in var: #var == "object":
+                    self.addLine(f"mov r15, [rsp+{(len(undo)-1-i)*8 + (8 if tree.name == "print" or tree.name == "println" else 0)}]")
+                    # if not "tmp" in args:
+                    self.addLine("dec qword ptr [r15-8]")
+                    # else:
+                    #     self.addLine("sub qword ptr [r15-8], 2")
+                elif "objectarray" in var:
+                    self.addLine(f"mov r15, [rsp+{(len(undo)-1-i)*8 + (8 if tree.name == "print" or tree.name == "println" else 0)}]")
                     self.addLine("push r15")
                     self.addLine("call _decarrcheck")
                     self.addLine("add rsp, 8")
@@ -2975,9 +3015,15 @@ class CodeGenerator():
             if "print" in args and nat:
                 self.addLine("call intstr")
                 self.addLine("add rsp, 8")
+                #self.addLine("inc qword ptr [rax-8]")
                 self.addLine("push rax")
+                # if "tmp" in args:
+                #     self.addLine("dec qword ptr [rax-8]")
+                return "object"
             if tree.name in baked and nat:
                 return "native"
+            # if not nat and "tmp" in args:
+            #     self.addLine("dec qword ptr [rax-8]")
             return "objectvar" if not nat else "native"
         if type(tree) is OperationNode:
             self.traverse_tree(tree.left)
@@ -3397,6 +3443,7 @@ class CodeGenerator():
                     self.addLine("call intstr")
                     self.addLine("add rsp, 8")
                     self.addLine("push rax")
+                    return "objectvar"
                 return "native"
             if type(tree) is BOOLNode:
                 self.addLine(f"push {1 if tree.value == True else -1}")
@@ -3404,6 +3451,7 @@ class CodeGenerator():
                     self.addLine("call intstr")
                     self.addLine("add rsp, 8")
                     self.addLine("push rax")
+                    return "object"
                 return "native"
             if type(tree) is IDENTIFIERNode:
                 self.addLine(f"push {self.getVarLoc(tree.value)}")
@@ -3411,6 +3459,27 @@ class CodeGenerator():
                     self.addLine("call intstr")
                     self.addLine("add rsp, 8")
                     self.addLine("push rax")
+                    # if "copy" in args:
+                    #     self.addLine("push 0")
+                    #     self.addLine("push qword ptr [rax]")
+                    #     self.addLine("push 1")
+                    #     self.addLine("call _strsplit")
+                    #     self.addLine("add rsp, 24")
+                    #     self.addLine("push rax")
+                    return "objectvar"
+                if "copy" in args:
+                    self.addLine("mov rax, [rsp]")
+                    self.addLine("inc qword ptr [rax-8]")
+                    self.addLine("push 0")
+                    self.addLine("push qword ptr [rax]")
+                    self.addLine("push 1")
+                    self.addLine("call _strsplit")
+                    self.addLine("dec qword ptr [rax-8]")
+                    self.addLine("mov r15, [rsp+24]")
+                    self.addLine("dec qword ptr [r15-8]")
+                    self.addLine("add rsp, 32")
+                    self.addLine("push rax")
+                    return "objectvar"
                 return varTypes[tree.value] + "var"
             if type(tree) is NONENode:
                 self.addLine("push 0")
@@ -3418,6 +3487,7 @@ class CodeGenerator():
                     self.addLine("call intstr")
                     self.addLine("add rsp, 8")
                     self.addLine("push rax")
+                    return "object"
                 return
             if type(tree) is STRINGNode:
                 if True: #"nonliteral" in args:
