@@ -483,6 +483,8 @@ class TokenType():
     MINUS = [TokenCategory.OPERATOR, "MINUS", REGULAR]
     PLUS = [TokenCategory.OPERATOR, "PLUS", REGULAR]
 
+    NOT = [TokenCategory.OPERATOR, "NOT", REGULAR]
+
     EXPONENT = [TokenCategory.OPERATOR, "EXPONENT", REGULAR]
 
     P_OPEN = [TokenCategory.OPERATOR, "P_OPEN", REGULAR]
@@ -539,7 +541,7 @@ class TokenType():
         "def": "DEF", "RETURN": "RETURN", "new": "NEW", #"global": "GLOBAL", "outer": "OUTER",
         "int": "INT", "float": "FLOAT", "bool": "BOOL", "string": "STRING", "NONE": "NONE", "Str": "STRING",
 
-        "is": "EQUALS_EQUALS",
+        "is": "EQUALS_EQUALS", "not": "NOT",
 
         "if": "IF", "end": "END", "AND": "AND", "OR": "OR", "else": "ELSE",
         "while": "WHILE", "continue": "CONTINUE", "BREAK": "BREAK",
@@ -666,6 +668,11 @@ class Parser():
         return left
 
     def parse_comparison(self):
+        notCount = 0
+        while self.token().isType(TokenType.NOT):
+            notCount += 1
+            self.advance()
+
         left = self.parse_addition()
 
         while self.token() and self.token().isChildOf(TokenType.COMPARATOR):
@@ -674,6 +681,8 @@ class Parser():
 
             right = self.parse_addition()
             left = OperationNode(left, operator, right)
+        for _ in range(notCount):
+            left = UnaryNode(left, "-")
         if self.token(1) and self.token().isChildOf(TokenType.SETTER) and self.token(1).isType(TokenType.IDENTIFIER):
             self.advance(2)
             return AssignmentNode(self.token(-1).value, left)
@@ -877,6 +886,8 @@ class Parser():
             return ARRAYNode(length, contents)
 
     def parse_statement(self, nested=False):
+        if self.token().isType(TokenType.NOT):
+            return self.parse_comparison()
         if self.token().isType(TokenType.NEW): #or self.token().isType(TokenType.GLOBAL) or self.token().isType(TokenType.OUTER):
             self.advance()
         if self.token().isType(TokenType.IF):
