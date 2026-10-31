@@ -2011,7 +2011,9 @@ class CodeGenerator():
                 "  mov rbx, [rbp+40]\n",
                 "  mov r15, [rax-16]\n",
                 "  cmp r15, [rbx-16]\n",
-                "  jne 0f\n",
+                "  jle 5f\n",
+                "  mov r15, [rbx-16]\n",
+                "  5:\n",
                 "  mov rdi, r15\n",
                 "  sub rdi, 24\n",
                 "  3:\n",
@@ -2851,17 +2853,26 @@ class CodeGenerator():
             self.addLine("mov r10, [r10]")
         return current[var]
 
-    def conditional(self, valOrReg1, cond: str | Token, valOrReg2=None):
+    def conditional(self, valOrReg1, cond: str | Token, valOrReg2=None, typ1="", typ2=""):
         if type(cond) is Token:
             cond = cond.value
         if cond.lower() != "and" and cond.lower() != "or":
-            self.addLine(f"cmp {valOrReg1}, {valOrReg2 if valOrReg2 else "1"}")
-            self.addLine(f"{self.conds[cond]} 0f")
-            self.addLine(f"mov {valOrReg1}, 1")
-            self.addLine("jmp 1f")
-            self.addLine("0:")
-            self.addLine(f"mov {valOrReg1}, -1")
-            self.addLine("1:")
+            if cond == "==" and "object" in typ1 and "object" in typ2:
+                self.addLine("push rax")
+                self.addLine(f"push {valOrReg1}")
+                self.addLine(f"push {valOrReg2}")
+                self.addLine("call equals")
+                self.addLine("add rsp, 16")
+                self.addLine(f"mov {valOrReg1}, rax")
+                self.addLine("pop rax")
+            else:
+                self.addLine(f"cmp {valOrReg1}, {valOrReg2 if valOrReg2 else "1"}")
+                self.addLine(f"{self.conds[cond]} 0f")
+                self.addLine(f"mov {valOrReg1}, 1")
+                self.addLine("jmp 1f")
+                self.addLine("0:")
+                self.addLine(f"mov {valOrReg1}, -1")
+                self.addLine("1:")
         elif cond.lower() == "and":
             self.addLine(f"cmp {valOrReg1}, 1")
             self.addLine("jne 0f")
@@ -2885,7 +2896,7 @@ class CodeGenerator():
             self.addLine(f"mov {valOrReg1}, -1")
             self.addLine("2:")
 
-    def insertOperation(self, valOrReg1, operation, valOrReg2):
+    def insertOperation(self, valOrReg1, operation, valOrReg2=None, typ1="", typ2=""):
         if operation == "+":
             self.addLine(f"add {valOrReg1}, {valOrReg2}")
         elif operation == "-":
@@ -2920,7 +2931,7 @@ class CodeGenerator():
             self.addLine("mov rcx, rdx")
         else:
             self.addLine(f"mov rax, {valOrReg1}")
-            self.conditional(valOrReg1, operation, valOrReg2 if valOrReg2 else None)
+            self.conditional(valOrReg1, operation, valOrReg2 if valOrReg2 else None, typ1 if typ1 else None, typ2 if typ2 else None)
 
     def insertUnary(self, valOrReg, operation):
         if operation == "-":
@@ -3025,12 +3036,13 @@ class CodeGenerator():
             # if not nat and "tmp" in args:
             #     self.addLine("dec qword ptr [rax-8]")
             return "objectvar" if not nat else "native"
+        
         if type(tree) is OperationNode:
-            self.traverse_tree(tree.left)
-            self.traverse_tree(tree.right)
+            typ1 = self.traverse_tree(tree.left)
+            typ2 = self.traverse_tree(tree.right)
             self.addLine("pop rdx")         # right side of equation, second register
             self.addLine("pop rcx")         # left side of equation, first register
-            self.insertOperation("rcx", tree.operation, "rdx")  # inserts the whole equation, left op right
+            self.insertOperation("rcx", tree.operation, "rdx", typ1, typ2)  # inserts the whole equation, left op right
             if not first:
                 self.addLine("push rcx\n")
             if first:
@@ -3707,10 +3719,10 @@ if __name__ == "__main__":
         else:
             f.write(out)
     # try:
-    #     out = Compiler("./Input.kog").Compile(True)
-    #     with open("./Input.s", "w") as f:
+    #     out = Compiler("./Compiler/Input.kog").Compile(True)
+    #     with open("./Compiler/Input.s", "w") as f:
     #         f.writelines(out)
     # except FileNotFoundError:
-    #     out = Compiler("./VSCode/Python/Compiler/Input.kog").Compile(True)
-    #     with open("./VSCode/Python/Compiler/Input.s", "w") as f:
+    #     out = Compiler("./Input.kog").Compile(True)
+    #     with open("./Input.s", "w") as f:
     #         f.writelines(out)
