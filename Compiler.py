@@ -533,6 +533,8 @@ class TokenType():
         "def": "DEF", "RETURN": "RETURN", "new": "NEW", #"global": "GLOBAL", "outer": "OUTER",
         "int": "INT", "float": "FLOAT", "bool": "BOOL", "string": "STRING", "NONE": "NONE", "Str": "STRING",
 
+        "is": "EQUALS_EQUALS",
+
         "if": "IF", "end": "END", "AND": "AND", "OR": "OR", "else": "ELSE",
         "while": "WHILE", "continue": "CONTINUE", "BREAK": "BREAK",
         "Array": "ARRAY", "as": "AS", "native": "INT", "Nat": "INT", "Obj": "TYPE_OBJECT", "object": "TYPE_OBJECT", "Arr": "ARRAY",
@@ -1440,6 +1442,7 @@ class CodeGenerator():
 
         self.conds = {
             "==": "jne",
+            "is": "jne",
             "!=": "je",
             "<": "jge",
             ">": "jle",
@@ -2962,12 +2965,10 @@ class CodeGenerator():
         if type(tree) is FunctionCall:
             undo = []
             doToString = tree.name == "print" or tree.name == "println" or tree.name == "strcon"
-            print(tree.name)
             if tree.name == "strcon":
                 arg0 = type(tree.args[0]) is STRINGNode and not tree.args[0].value
                 arg1 = type(tree.args[1]) is STRINGNode and not tree.args[1].value
                 if arg0 or arg1:
-                    print(arg0, arg1)
                     if arg0:
                         self.traverse_tree(tree.args[1], False, ["print", "nonliteral", "copy", "dec"])
                     elif arg1:
@@ -2977,7 +2978,6 @@ class CodeGenerator():
                         self.addLine("inc qword ptr [rax-8]")
                     self.addLine("push rax")
                     return "object"
-            #print(tree)
             for arg in tree.args if not (tree.name == "print" or tree.name == "println") else tree.args[::-1]:
                 if tree.name == "strcon" and type(arg) is FunctionCall and arg.name == "strcon":
                     retType = self.traverse_tree(arg, False, ["print", "nonliteral", "tmp", "dec"] if doToString else ["nonliteral", "tmp", "dec"])
