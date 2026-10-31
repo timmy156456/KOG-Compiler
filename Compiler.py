@@ -1212,7 +1212,8 @@ class SemanticAnalyzer():
             "<=": boolRules,
             ">=": boolRules,
             "<": boolRules,
-            ">": boolRules
+            ">": boolRules,
+            "is": boolRules
         }
 
     def Analyze(self, returnVars=False):
