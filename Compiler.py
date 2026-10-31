@@ -1,4 +1,7 @@
 import argparse
+import subprocess
+import os
+from pathlib import Path
 
 class Compiler():
     def __init__(self, src):
@@ -8,16 +11,19 @@ class Compiler():
         with open(self.source_file, "r") as src:
             return [line for line in src]
 
-    def Compile(self, optim):
+    def Compile(self, optim, tokenDump, parserDump, semanticDump):
         lex = Lexer(self.source_file)
         if not lex.lineLen:
             return ".intel_syntax noprefix\n.global _start\n_start:\nmov rax, 60\nxor rdi, rdi\nsyscall\n"
         lex = lex.Tokenize()
-        #print(f"///{lex}///")
+        if tokenDump:
+            print(f"///{lex}///")
         parser = Parser(lex).Parse()
-        #print(f"///{parser}///")
+        if parserDump:
+            print(f"///{parser}///")
         semantic = SemanticAnalyzer(parser).Analyze()
-        #print(f"///{semantic}///")
+        if semanticDump:
+            print(f"///{semantic}///")
         generator = CodeGenerator(semantic).Generate() + ["push 0\ncall exit\n"]
         return Optimizer(generator).Optimize() if optim else generator
 
@@ -3708,16 +3714,39 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="KOG compiler")
     parser.add_argument("source", help="path to the .kog file")
     parser.add_argument("output", help="path for the .s file")
+    parser.add_argument("--dryrun", action="store_true", help="do a dry run to inspect tokens or AST, wont create executable or assembly file")
     parser.add_argument("--no-optim", action="store_true", help="disable optimizations")
+    parser.add_argument("--dump-tokens", action="store_true", help="print all gathered tokens")
+    parser.add_argument("--dump-parser", action="store_true", help="print the created AST")
+    parser.add_argument("--dump-semantic", action="store_true", help="print AST after semantic analisys and simplification")
+    parser.add_argument("--compile", action="store_true", help="compiles directly to machine code")
     args = parser.parse_args()
 
     optimize = not args.no_optim
-    out = Compiler(args.source).Compile(optimize)
-    with open(args.output, "w") as f:
+    out = Compiler(args.source).Compile(optimize, args.dump_tokens, args.dump_parser, args.dump_semantic)
+
+    if args.output.rfind(".") == -1:
+        args.output += ".s"
+    else:
+        args.output = args.output[:args.output.rfind(".")] + ".s"
+    if args.dryrun:
+        exit()
+    with open(Path(args.output).absolute(), "w") as f:
         if type(out) is list:
             f.writelines(out)
         else:
             f.write(out)
+    doCompile = args.compile
+    if args.compile:
+        outPath = Path(args.output).absolute()
+        inPath = Path(args.source).absolute()
+        os.chdir(outPath.parent)
+        newOut = outPath.parent.absolute() / Path(outPath.name[:outPath.name.rfind(".")])
+        newDotOOut = newOut.parent / (newOut.name + ".o")
+        subprocess.run(["as", outPath, "-o", newDotOOut])   # assemble to object file
+        subprocess.run(["ld", newDotOOut, "-o", newOut])    # link to an executable
+        subprocess.run(["rm", newDotOOut])                  # delete object file
+        subprocess.run(["rm", outPath])                     # delete asm file
     # try:
     #     out = Compiler("./Compiler/Input.kog").Compile(True)
     #     with open("./Compiler/Input.s", "w") as f:
