@@ -2212,9 +2212,10 @@ class CodeGenerator():
                 "_decarrcheck:\n",
                 "  push rsp\n",
                 "  push rbp\n",
+                "  push rax\n",
                 "  mov rbp, rsp\n",
                 "  sub rsp, 8\n",
-                "  mov rax, [rbp+24]\n",
+                "  mov rax, [rbp+32]\n",
                 "  cmp qword ptr [rax-8], 1\n",
                 "  jne 4f\n",
                 "  lea r15, [rax]\n",
@@ -2250,6 +2251,7 @@ class CodeGenerator():
                 "  4:\n",
                 "  dec qword ptr [rax-8]\n",
                 "  add rsp, 8\n",
+                "  pop rax\n",
                 "  pop rbp\n",
                 "  pop rsp\n",
                 "  ret\n",
@@ -3468,7 +3470,8 @@ class CodeGenerator():
 
         if self.isNode(tree):
             if type(tree) is INTNode:
-                self.addLine(f"push {tree.value}")
+                self.addLine(f"mov rax, {tree.value}")
+                self.addLine("push rax")
                 if "print" in args:
                     self.addLine("call intstr")
                     self.addLine("add rsp, 8")
@@ -3697,6 +3700,13 @@ class Optimizer():
                 if first == second and not first[1:].startswith("_var_"):
                     val = l[l.index(",")+2:-1]
                     place = v[4:v.index(",")]
+                    if len(val) >= 10:
+                        try:
+                            int(val)
+                            newList.append(v)
+                            continue
+                        except ValueError:
+                            pass
                     if not "[" in val and not "qword ptr" in place:
                         if place == val:
                             continue
@@ -3760,10 +3770,10 @@ if __name__ == "__main__":
         subprocess.run(["rm", newDotOOut])                  # delete object file
         subprocess.run(["rm", outPath])                     # delete asm file
     # try:
-    #     out = Compiler("./Compiler/Input.kog").Compile(True)
+    #     out = Compiler("./Compiler/Input.kog").Compile(True, False, False, False)
     #     with open("./Compiler/Input.s", "w") as f:
     #         f.writelines(out)
     # except FileNotFoundError:
-    #     out = Compiler("./Input.kog").Compile(True)
+    #     out = Compiler("./Input.kog").Compile(True, False, False, False)
     #     with open("./Input.s", "w") as f:
     #         f.writelines(out)
